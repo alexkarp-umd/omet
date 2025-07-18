@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
@@ -52,7 +51,7 @@ func TestParseLabels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parseLabels(tt.input)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -111,9 +110,9 @@ func TestReadValueFromStdin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cleanup := mockStdin(t, tt.input)
 			defer cleanup()
-			
+
 			result, err := readValueFromStdin()
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -185,7 +184,7 @@ func TestIncrementCounter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := incrementCounter(tt.families, tt.metricName, tt.labels, tt.increment)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -246,7 +245,7 @@ func TestSetGauge(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := setGauge(tt.families, tt.metricName, tt.labels, tt.value)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -263,9 +262,9 @@ func TestObserveHistogram(t *testing.T) {
 	// This test should fail since the function is not implemented
 	families := make(map[string]*dto.MetricFamily)
 	labels := map[string]string{}
-	
+
 	err := observeHistogram(families, "test_histogram", labels, 0.123)
-	
+
 	// We expect this to fail with "not yet implemented" error
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not yet implemented")
@@ -283,7 +282,7 @@ func TestApplyOperation(t *testing.T) {
 			operation: "inc",
 		},
 		{
-			name:      "valid set operation", 
+			name:      "valid set operation",
 			operation: "set",
 		},
 		{
@@ -304,9 +303,9 @@ func TestApplyOperation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			families := make(map[string]*dto.MetricFamily)
 			labels := map[string]string{}
-			
+
 			err := applyOperation(families, "test_metric", tt.operation, labels, 1.0)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -375,17 +374,17 @@ func TestLabelsMatch(t *testing.T) {
 func TestFindOrCreateMetric(t *testing.T) {
 	// Test finding existing metric
 	existingFamily := createTestCounterFamily("test_counter", 10.0)["test_counter"]
-	
+
 	// Add labels to the existing metric
 	existingFamily.Metric[0].Label = []*dto.LabelPair{
 		{Name: stringPtr("env"), Value: stringPtr("prod")},
 	}
-	
+
 	// Should find the existing metric
 	foundMetric := findOrCreateMetric(existingFamily, map[string]string{"env": "prod"})
 	assert.Equal(t, existingFamily.Metric[0], foundMetric)
 	assert.Len(t, existingFamily.Metric, 1) // Should not create a new one
-	
+
 	// Should create a new metric with different labels
 	newMetric := findOrCreateMetric(existingFamily, map[string]string{"env": "dev"})
 	assert.NotEqual(t, existingFamily.Metric[0], newMetric)
@@ -419,7 +418,7 @@ func TestCreateLabelPairs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := createLabelPairs(tt.input)
 			assert.Len(t, result, tt.expected)
-			
+
 			// Verify all labels are present
 			labelMap := make(map[string]string)
 			for _, pair := range result {
@@ -461,11 +460,11 @@ func TestParseMetrics(t *testing.T) {
 			filename: "testdata/sample_metrics.txt",
 			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
 				assert.Len(t, families, 2) // Should have both counter and gauge
-				
+
 				counterFamily, exists := families["http_requests_total"]
 				require.True(t, exists)
 				assert.Equal(t, dto.MetricType_COUNTER, counterFamily.GetType())
-				
+
 				gaugeFamily, exists := families["memory_usage_bytes"]
 				require.True(t, exists)
 				assert.Equal(t, dto.MetricType_GAUGE, gaugeFamily.GetType())
@@ -478,9 +477,9 @@ func TestParseMetrics(t *testing.T) {
 			file, err := os.Open(tt.filename)
 			require.NoError(t, err)
 			defer file.Close()
-			
+
 			families, err := parseMetrics(file)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -496,24 +495,24 @@ func TestParseMetrics(t *testing.T) {
 func TestWriteMetrics(t *testing.T) {
 	// Create test families
 	families := make(map[string]*dto.MetricFamily)
-	
+
 	// Add a counter
 	counterFamily := createTestCounterFamily("test_counter", 42.0)["test_counter"]
 	counterFamily.Metric[0].Label = []*dto.LabelPair{
 		{Name: stringPtr("service"), Value: stringPtr("api")},
 	}
 	families["test_counter"] = counterFamily
-	
+
 	// Add a gauge
 	gaugeFamily := createTestGaugeFamily("test_gauge", 75.5)["test_gauge"]
 	families["test_gauge"] = gaugeFamily
-	
+
 	// Capture output
 	output := captureOutput(t, func() {
 		err := writeMetrics(families, os.Stdout)
 		require.NoError(t, err)
 	})
-	
+
 	// Verify output contains expected elements
 	assert.Contains(t, output, "# HELP test_counter Test counter")
 	assert.Contains(t, output, "# TYPE test_counter counter")
@@ -549,15 +548,15 @@ test_counter 10
 			args: []string{"omet", "-f", testFile, "new_gauge", "set", "42.5"},
 			validateFunc: func(t *testing.T, output string) {
 				assert.Contains(t, output, "test_counter 10") // Original should remain
-				assert.Contains(t, output, "new_gauge 42.5")   // New gauge should be added
+				assert.Contains(t, output, "new_gauge 42.5")  // New gauge should be added
 			},
 		},
 		{
 			name: "increment with labels",
 			args: []string{"omet", "-f", testFile, "-l", "env=prod", "-l", "service=api", "test_counter", "inc", "1"},
 			validateFunc: func(t *testing.T, output string) {
-				assert.Contains(t, output, "test_counter 10")                                    // Original unlabeled
-				assert.Contains(t, output, `test_counter{env="prod",service="api"} 1`)          // New labeled metric
+				assert.Contains(t, output, "test_counter 10")                          // Original unlabeled
+				assert.Contains(t, output, `test_counter{env="prod",service="api"} 1`) // New labeled metric
 			},
 		},
 		{
@@ -575,7 +574,7 @@ test_counter 10
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app := createTestApp()
-			
+
 			if tt.expectError {
 				err := app.Run(tt.args)
 				assert.Error(t, err)
@@ -584,7 +583,7 @@ test_counter 10
 					err := app.Run(tt.args)
 					require.NoError(t, err)
 				})
-				
+
 				if tt.validateFunc != nil {
 					tt.validateFunc(t, output)
 				}
