@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
@@ -598,4 +599,109 @@ func createTestHistogramFamily(name string, bucketBounds []float64, bucketCounts
 		},
 	}
 	return families
+}
+
+func TestMetricRoundTrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation string
+		value     float64
+	}{
+		{"counter", "inc", 5.0},
+		{"gauge", "set", 42.5},
+		{"histogram", "observe", 0.123},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			families := make(map[string]*dto.MetricFamily)
+			
+			// Apply operation
+			err := applyOperation(families, "test_metric", tt.operation, map[string]string{}, tt.value)
+			require.NoError(t, err)
+			
+			// Verify we can write it (this would have caught the bug!)
+			var buf bytes.Buffer
+			err = writeMetrics(families, &buf)
+			require.NoError(t, err)
+			
+			// Basic sanity check
+			output := buf.String()
+			assert.Contains(t, output, "test_metric")
+			assert.NotEmpty(t, output)
+		})
+	}
+}
+
+func TestHistogramDebug(t *testing.T) {
+	t.Run("single observation debug", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		
+		// Add one observation
+		err := observeHistogram(families, "response_time", map[string]string{"service": "web-api"}, 0.25)
+		require.NoError(t, err)
+		
+		// Debug: Print the internal structure
+		family := families["response_time"]
+		metric := family.Metric[0]
+		histogram := metric.Histogram
+		
+		t.Logf("Sample Count: %d", histogram.GetSampleCount())
+		t.Logf("Sample Sum: %g", histogram.GetSampleSum())
+		t.Logf("Number of buckets: %d", len(histogram.Bucket))
+		
+		for i, bucket := range histogram.Bucket {
+			t.Logf("Bucket %d: le=%g, count=%d", i, bucket.GetUpperBound(), bucket.GetCumulativeCount())
+		}
+		
+		// Test serialization
+		var buf bytes.Buffer
+		err = writeMetrics(families, &buf)
+		require.NoError(t, err)
+		
+		output := buf.String()
+		t.Logf("Serialized output:\n%s", output)
+		
+		// Verify we get the expected output
+		assert.Contains(t, output, "response_time_count")
+		assert.Contains(t, output, "response_time_sum")
+		assert.Contains(t, output, "response_time_bucket")
+	})
+	
+	t.Run("multiple observations debug", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		
+		// Add multiple observations
+		values := []float64{0.25, 100, 1000}
+		for _, val := range values {
+			err := observeHistogram(families, "response_time", map[string]string{"service": "web-api"}, val)
+			require.NoError(t, err)
+		}
+		
+		// Debug internal state
+		family := families["response_time"]
+		metric := family.Metric[0]
+		histogram := metric.Histogram
+		
+		t.Logf("After %d observations:", len(values))
+		t.Logf("Sample Count: %d", histogram.GetSampleCount())
+		t.Logf("Sample Sum: %g", histogram.GetSampleSum())
+		
+		expectedSum := 0.25 + 100 + 1000 // = 1100.25
+		assert.Equal(t, uint64(3), histogram.GetSampleCount())
+		assert.InDelta(t, expectedSum, histogram.GetSampleSum(), 1e-10)
+		
+		// Check bucket distribution
+		for i, bucket := range histogram.Bucket {
+			t.Logf("Bucket %d: le=%g, count=%d", i, bucket.GetUpperBound(), bucket.GetCumulativeCount())
+		}
+		
+		// Test serialization
+		var buf bytes.Buffer
+		err := writeMetrics(families, &buf)
+		require.NoError(t, err)
+		
+		output := buf.String()
+		t.Logf("Serialized output:\n%s", output)
+	})
 }
