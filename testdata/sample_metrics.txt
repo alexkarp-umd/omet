@@ -1,0 +1,8 @@
+# HELP http_requests_total Total HTTP requests                                                                                                                                                                                          
+# TYPE http_requests_total counter                                                                                                                                                                                                      
+http_requests_total 100                                                                                                                                                                                                                 
+http_requests_total{method="GET",status="200"} 85                                                                                                                                                                                       
+                                                                                                                                                                                                                                        
+# HELP memory_usage_bytes Current memory usage                                                                                                                                                                                          
+# TYPE memory_usage_bytes gauge                                                                                                                                                                                                         
+memory_usage_bytes 1048576  

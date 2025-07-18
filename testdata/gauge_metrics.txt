@@ -1,0 +1,4 @@
+# HELP cpu_usage CPU usage percentage                                                                                                                                                                                                   
+# TYPE cpu_usage gauge                                                                                                                                                                                                                  
+cpu_usage 75.5                                                                                                                                                                                                                          
+cpu_usage{core="0"} 80.0  

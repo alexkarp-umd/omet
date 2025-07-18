@@ -1,0 +1,4 @@
+# HELP requests_total Total requests                                                                                                                                                                                                    
+# TYPE requests_total counter                                                                                                                                                                                                           
+requests_total 42                                                                                                                                                                                                                       
+requests_total{service="api"} 10 
