@@ -468,6 +468,79 @@ func TestMetricRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHistogramDebug(t *testing.T) {
+	t.Run("single observation debug", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		
+		// Add one observation
+		err := observeHistogram(families, "response_time", map[string]string{"service": "web-api"}, 0.25)
+		require.NoError(t, err)
+		
+		// Debug: Print the internal structure
+		family := families["response_time"]
+		metric := family.Metric[0]
+		histogram := metric.Histogram
+		
+		t.Logf("Sample Count: %d", histogram.GetSampleCount())
+		t.Logf("Sample Sum: %g", histogram.GetSampleSum())
+		t.Logf("Number of buckets: %d", len(histogram.Bucket))
+		
+		for i, bucket := range histogram.Bucket {
+			t.Logf("Bucket %d: le=%g, count=%d", i, bucket.GetUpperBound(), bucket.GetCumulativeCount())
+		}
+		
+		// Test serialization
+		var buf bytes.Buffer
+		err = writeMetrics(families, &buf)
+		require.NoError(t, err)
+		
+		output := buf.String()
+		t.Logf("Serialized output:\n%s", output)
+		
+		// Verify we get the expected output
+		assert.Contains(t, output, "response_time_count")
+		assert.Contains(t, output, "response_time_sum")
+		assert.Contains(t, output, "response_time_bucket")
+	})
+	
+	t.Run("multiple observations debug", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		
+		// Add multiple observations
+		values := []float64{0.25, 100, 1000}
+		for _, val := range values {
+			err := observeHistogram(families, "response_time", map[string]string{"service": "web-api"}, val)
+			require.NoError(t, err)
+		}
+		
+		// Debug internal state
+		family := families["response_time"]
+		metric := family.Metric[0]
+		histogram := metric.Histogram
+		
+		t.Logf("After %d observations:", len(values))
+		t.Logf("Sample Count: %d", histogram.GetSampleCount())
+		t.Logf("Sample Sum: %g", histogram.GetSampleSum())
+		
+		expectedSum := 0.25 + 100 + 1000 // = 1100.25
+		assert.Equal(t, uint64(3), histogram.GetSampleCount())
+		assert.InDelta(t, expectedSum, histogram.GetSampleSum(), 1e-10)
+		
+		// Check bucket distribution
+		for i, bucket := range histogram.Bucket {
+			t.Logf("Bucket %d: le=%g, count=%d", i, bucket.GetUpperBound(), bucket.GetCumulativeCount())
+		}
+		
+		// Test serialization
+		var buf bytes.Buffer
+		err := writeMetrics(families, &buf)
+		require.NoError(t, err)
+		
+		output := buf.String()
+		t.Logf("Serialized output:\n%s", output)
+	})
+}
+
 func stringPtr(s string) *string {
 	return &s
 }
