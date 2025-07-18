@@ -400,19 +400,36 @@ func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error
 			}
 
 			// Write value based on type
-			var value float64
 			switch family.GetType() {
 			case dto.MetricType_COUNTER:
-				value = metric.GetCounter().GetValue()
+				value := metric.GetCounter().GetValue()
+				fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
 			case dto.MetricType_GAUGE:
-				value = metric.GetGauge().GetValue()
+				value := metric.GetGauge().GetValue()
+				fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
+			case dto.MetricType_HISTOGRAM:
+				histogram := metric.GetHistogram()
+				
+				// Write histogram buckets
+				for _, bucket := range histogram.GetBucket() {
+					bucketLabelStr := labelStr
+					if len(labelParts) > 0 {
+						bucketLabelStr = fmt.Sprintf("{%s,le=\"%g\"}", strings.Join(labelParts, ","), bucket.GetUpperBound())
+					} else {
+						bucketLabelStr = fmt.Sprintf("{le=\"%g\"}", bucket.GetUpperBound())
+					}
+					fmt.Fprintf(output, "%s_bucket%s %d\n", name, bucketLabelStr, bucket.GetCumulativeCount())
+				}
+				
+				// Write count and sum
+				fmt.Fprintf(output, "%s_count%s %d\n", name, labelStr, histogram.GetSampleCount())
+				fmt.Fprintf(output, "%s_sum%s %g\n", name, labelStr, histogram.GetSampleSum())
 			default:
 				if metric.Untyped != nil {
-					value = metric.GetUntyped().GetValue()
+					value := metric.GetUntyped().GetValue()
+					fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
 				}
 			}
-
-			fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
 		}
 	}
 
