@@ -138,10 +138,8 @@ func TestApplyOperation(t *testing.T) {
 			operation: "set",
 		},
 		{
-			name:        "valid observe operation (but unimplemented)",
-			operation:   "observe",
-			expectError: true,
-			errorMsg:    "not yet implemented",
+			name:      "valid observe operation",
+			operation: "observe",
 		},
 		{
 			name:        "invalid operation",
