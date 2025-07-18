@@ -409,7 +409,7 @@ func TestObserveHistogram(t *testing.T) {
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				if tt.validate != nil {
 					tt.validate(t, tt.families)
 				}
