@@ -436,6 +436,38 @@ func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error
 	return nil
 }
 
+func TestMetricRoundTrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation string
+		value     float64
+	}{
+		{"counter", "inc", 5.0},
+		{"gauge", "set", 42.5},
+		{"histogram", "observe", 0.123},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			families := make(map[string]*dto.MetricFamily)
+			
+			// Apply operation
+			err := applyOperation(families, "test_metric", tt.operation, map[string]string{}, tt.value)
+			require.NoError(t, err)
+			
+			// Verify we can write it (this would have caught the bug!)
+			var buf bytes.Buffer
+			err = writeMetrics(families, &buf)
+			require.NoError(t, err)
+			
+			// Basic sanity check
+			output := buf.String()
+			assert.Contains(t, output, "test_metric")
+			assert.NotEmpty(t, output)
+		})
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }
