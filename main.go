@@ -14,6 +14,9 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// Standard histogram buckets for response times (in seconds)
+var defaultHistogramBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+
 func main() {
 	app := &cli.App{
 		Name:  "omet",
@@ -198,33 +201,17 @@ func applyOperation(families map[string]*dto.MetricFamily, metricName, operation
 }
 
 func incrementCounter(families map[string]*dto.MetricFamily, name string, labels map[string]string, increment float64) error {
-	// Find or create metric family
-	family, exists := families[name]
-	if !exists {
-		// Create new counter family
-		metricType := dto.MetricType_COUNTER
-		family = &dto.MetricFamily{
-			Name: &name,
-			Type: &metricType,
-			Help: stringPtr(fmt.Sprintf("Counter metric %s", name)),
-		}
-		families[name] = family
+	family, err := getOrCreateFamily(families, name, dto.MetricType_COUNTER)
+	if err != nil {
+		return err
 	}
 
-	// Ensure it's actually a counter
-	if family.GetType() != dto.MetricType_COUNTER {
-		return fmt.Errorf("metric %s is not a counter (type: %s)", name, family.GetType())
-	}
-
-	// Find matching metric or create new one
 	metric := findOrCreateMetric(family, labels)
 
-	// Initialize counter if it doesn't exist
 	if metric.Counter == nil {
 		metric.Counter = &dto.Counter{Value: float64Ptr(0)}
 	}
 
-	// Increment the counter
 	currentValue := metric.Counter.GetValue()
 	metric.Counter.Value = float64Ptr(currentValue + increment)
 
@@ -232,31 +219,53 @@ func incrementCounter(families map[string]*dto.MetricFamily, name string, labels
 }
 
 func setGauge(families map[string]*dto.MetricFamily, name string, labels map[string]string, value float64) error {
-	// Find or create metric family
-	family, exists := families[name]
-	if !exists {
-		// Create new gauge family
-		metricType := dto.MetricType_GAUGE
-		family = &dto.MetricFamily{
-			Name: &name,
-			Type: &metricType,
-			Help: stringPtr(fmt.Sprintf("Gauge metric %s", name)),
-		}
-		families[name] = family
+	family, err := getOrCreateFamily(families, name, dto.MetricType_GAUGE)
+	if err != nil {
+		return err
 	}
 
-	// Ensure it's actually a gauge
-	if family.GetType() != dto.MetricType_GAUGE {
-		return fmt.Errorf("metric %s is not a gauge (type: %s)", name, family.GetType())
-	}
-
-	// Find matching metric or create new one
 	metric := findOrCreateMetric(family, labels)
-
-	// Set the gauge value
 	metric.Gauge = &dto.Gauge{Value: float64Ptr(value)}
 
 	return nil
+}
+
+func createMetricFamily(name string, metricType dto.MetricType) *dto.MetricFamily {
+	typeStr := strings.ToLower(metricType.String())
+	// Capitalize first letter manually for consistency
+	if len(typeStr) > 0 {
+		typeStr = strings.ToUpper(typeStr[:1]) + typeStr[1:]
+	}
+	
+	return &dto.MetricFamily{
+		Name: &name,
+		Type: &metricType,
+		Help: stringPtr(fmt.Sprintf("%s metric %s", typeStr, name)),
+	}
+}
+
+func validateMetricType(family *dto.MetricFamily, expectedType dto.MetricType, metricName string) error {
+	if family.GetType() != expectedType {
+		return fmt.Errorf("metric %s is not a %s (type: %s)", 
+			metricName, 
+			strings.ToLower(expectedType.String()), 
+			family.GetType())
+	}
+	return nil
+}
+
+func getOrCreateFamily(families map[string]*dto.MetricFamily, name string, metricType dto.MetricType) (*dto.MetricFamily, error) {
+	family, exists := families[name]
+	if !exists {
+		family = createMetricFamily(name, metricType)
+		families[name] = family
+	}
+
+	if err := validateMetricType(family, metricType, name); err != nil {
+		return nil, err
+	}
+
+	return family, nil
 }
 
 func observeHistogram(families map[string]*dto.MetricFamily, name string, labels map[string]string, value float64) error {
