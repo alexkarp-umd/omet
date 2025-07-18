@@ -361,7 +361,7 @@ func TestObserveHistogram(t *testing.T) {
 				assert.Equal(t, uint64(2), metric.Histogram.GetSampleCount())
 				
 				// Should have sum = 0.3 (original 0.1 + new 0.2)
-				assert.Equal(t, 0.3, metric.Histogram.GetSampleSum())
+				assert.InDelta(t, 0.3, metric.Histogram.GetSampleSum(), 1e-10)
 			},
 		},
 		{
