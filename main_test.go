@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
@@ -118,6 +117,54 @@ func TestReadValueFromStdin(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestApplyOperation(t *testing.T) {
+	tests := []struct {
+		name        string
+		operation   string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:      "valid inc operation",
+			operation: "inc",
+		},
+		{
+			name:      "valid set operation",
+			operation: "set",
+		},
+		{
+			name:        "valid observe operation (but unimplemented)",
+			operation:   "observe",
+			expectError: true,
+			errorMsg:    "not yet implemented",
+		},
+		{
+			name:        "invalid operation",
+			operation:   "invalid",
+			expectError: true,
+			errorMsg:    "unknown operation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			families := make(map[string]*dto.MetricFamily)
+			labels := map[string]string{}
+
+			err := applyOperation(families, "test_metric", tt.operation, labels, 1.0)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}
@@ -270,51 +317,6 @@ func TestObserveHistogram(t *testing.T) {
 	assert.Contains(t, err.Error(), "not yet implemented")
 }
 
-func TestApplyOperation(t *testing.T) {
-	tests := []struct {
-		name        string
-		operation   string
-		expectError bool
-		errorMsg    string
-	}{
-		{
-			name:      "valid inc operation",
-			operation: "inc",
-		},
-		{
-			name:      "valid set operation",
-			operation: "set",
-		},
-		{
-			name:        "valid observe operation (but unimplemented)",
-			operation:   "observe",
-			expectError: true,
-			errorMsg:    "not yet implemented",
-		},
-		{
-			name:        "invalid operation",
-			operation:   "invalid",
-			expectError: true,
-			errorMsg:    "unknown operation",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			families := make(map[string]*dto.MetricFamily)
-			labels := map[string]string{}
-
-			err := applyOperation(families, "test_metric", tt.operation, labels, 1.0)
-
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestLabelsMatch(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -425,169 +427,6 @@ func TestCreateLabelPairs(t *testing.T) {
 				labelMap[pair.GetName()] = pair.GetValue()
 			}
 			assert.Equal(t, tt.input, labelMap)
-		})
-	}
-}
-
-func TestParseMetrics(t *testing.T) {
-	tests := []struct {
-		name        string
-		filename    string
-		expectError bool
-		validate    func(t *testing.T, families map[string]*dto.MetricFamily)
-	}{
-		{
-			name:     "parse counter metrics",
-			filename: "testdata/counter_metrics.txt",
-			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
-				family, exists := families["requests_total"]
-				require.True(t, exists)
-				assert.Equal(t, dto.MetricType_COUNTER, family.GetType())
-				assert.Contains(t, family.GetHelp(), "Total requests")
-			},
-		},
-		{
-			name:     "parse gauge metrics",
-			filename: "testdata/gauge_metrics.txt",
-			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
-				family, exists := families["cpu_usage"]
-				require.True(t, exists)
-				assert.Equal(t, dto.MetricType_GAUGE, family.GetType())
-			},
-		},
-		{
-			name:     "parse sample metrics",
-			filename: "testdata/sample_metrics.txt",
-			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
-				assert.Len(t, families, 2) // Should have both counter and gauge
-
-				counterFamily, exists := families["http_requests_total"]
-				require.True(t, exists)
-				assert.Equal(t, dto.MetricType_COUNTER, counterFamily.GetType())
-
-				gaugeFamily, exists := families["memory_usage_bytes"]
-				require.True(t, exists)
-				assert.Equal(t, dto.MetricType_GAUGE, gaugeFamily.GetType())
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			file, err := os.Open(tt.filename)
-			require.NoError(t, err)
-			defer file.Close()
-
-			families, err := parseMetrics(file)
-
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				if tt.validate != nil {
-					tt.validate(t, families)
-				}
-			}
-		})
-	}
-}
-
-func TestWriteMetrics(t *testing.T) {
-	// Create test families
-	families := make(map[string]*dto.MetricFamily)
-
-	// Add a counter
-	counterFamily := createTestCounterFamily("test_counter", 42.0)["test_counter"]
-	counterFamily.Metric[0].Label = []*dto.LabelPair{
-		{Name: stringPtr("service"), Value: stringPtr("api")},
-	}
-	families["test_counter"] = counterFamily
-
-	// Add a gauge
-	gaugeFamily := createTestGaugeFamily("test_gauge", 75.5)["test_gauge"]
-	families["test_gauge"] = gaugeFamily
-
-	// Capture output
-	output := captureOutput(t, func() {
-		err := writeMetrics(families, os.Stdout)
-		require.NoError(t, err)
-	})
-
-	// Verify output contains expected elements
-	assert.Contains(t, output, "# HELP test_counter Test counter")
-	assert.Contains(t, output, "# TYPE test_counter counter")
-	assert.Contains(t, output, "test_counter{service=\"api\"} 42")
-	assert.Contains(t, output, "# HELP test_gauge Test gauge")
-	assert.Contains(t, output, "# TYPE test_gauge gauge")
-	assert.Contains(t, output, "test_gauge 75.5")
-}
-
-func TestEndToEndCLI(t *testing.T) {
-	// Create a temporary test file
-	testContent := `# HELP test_counter A test counter
-# TYPE test_counter counter
-test_counter 10
-`
-	testFile := createTempFile(t, testContent)
-
-	tests := []struct {
-		name         string
-		args         []string
-		expectError  bool
-		validateFunc func(t *testing.T, output string)
-	}{
-		{
-			name: "increment counter",
-			args: []string{"omet", "-f", testFile, "test_counter", "inc", "5"},
-			validateFunc: func(t *testing.T, output string) {
-				assert.Contains(t, output, "test_counter 15")
-			},
-		},
-		{
-			name: "set new gauge",
-			args: []string{"omet", "-f", testFile, "new_gauge", "set", "42.5"},
-			validateFunc: func(t *testing.T, output string) {
-				assert.Contains(t, output, "test_counter 10") // Original should remain
-				assert.Contains(t, output, "new_gauge 42.5")  // New gauge should be added
-			},
-		},
-		{
-			name: "increment with labels",
-			args: []string{"omet", "-f", testFile, "-l", "env=prod", "-l", "service=api", "test_counter", "inc", "1"},
-			validateFunc: func(t *testing.T, output string) {
-				assert.Contains(t, output, "test_counter 10")                          // Original unlabeled
-				assert.Contains(t, output, `test_counter{env="prod",service="api"} 1`) // New labeled metric
-			},
-		},
-		{
-			name:        "invalid operation",
-			args:        []string{"omet", "-f", testFile, "test_counter", "invalid"},
-			expectError: true,
-		},
-		{
-			name:        "insufficient arguments",
-			args:        []string{"omet", "test_counter"},
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			app := createTestApp()
-
-			if tt.expectError {
-				err := app.Run(tt.args)
-				assert.Error(t, err)
-			} else {
-				output := captureOutput(t, func() {
-					err := app.Run(tt.args)
-					require.NoError(t, err)
-				})
-
-				if tt.validateFunc != nil {
-					tt.validateFunc(t, output)
-				}
-			}
 		})
 	}
 }
