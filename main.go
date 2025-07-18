@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -269,12 +270,62 @@ func getOrCreateFamily(families map[string]*dto.MetricFamily, name string, metri
 }
 
 func observeHistogram(families map[string]*dto.MetricFamily, name string, labels map[string]string, value float64) error {
-	// TODO: Implement histogram observation
-	// This would require:
-	// 1. Managing histogram buckets
-	// 2. Updating count and sum
-	// 3. Incrementing appropriate bucket counters
-	return fmt.Errorf("histogram observe operation not yet implemented")
+	family, err := getOrCreateFamily(families, name, dto.MetricType_HISTOGRAM)
+	if err != nil {
+		return err
+	}
+
+	metric := findOrCreateMetric(family, labels)
+
+	// Initialize histogram if it doesn't exist
+	if metric.Histogram == nil {
+		metric.Histogram = createHistogram(defaultHistogramBuckets)
+	}
+
+	// Update sample count and sum
+	currentCount := metric.Histogram.GetSampleCount()
+	currentSum := metric.Histogram.GetSampleSum()
+	
+	metric.Histogram.SampleCount = uint64Ptr(currentCount + 1)
+	metric.Histogram.SampleSum = float64Ptr(currentSum + value)
+
+	// Update bucket counts
+	for _, bucket := range metric.Histogram.Bucket {
+		if value <= bucket.GetUpperBound() {
+			currentBucketCount := bucket.GetCumulativeCount()
+			bucket.CumulativeCount = uint64Ptr(currentBucketCount + 1)
+		}
+	}
+
+	return nil
+}
+
+func createHistogram(buckets []float64) *dto.Histogram {
+	var histogramBuckets []*dto.Bucket
+	
+	// Create buckets with the specified upper bounds
+	for _, bound := range buckets {
+		histogramBuckets = append(histogramBuckets, &dto.Bucket{
+			UpperBound:      float64Ptr(bound),
+			CumulativeCount: uint64Ptr(0),
+		})
+	}
+	
+	// Add +Inf bucket
+	histogramBuckets = append(histogramBuckets, &dto.Bucket{
+		UpperBound:      float64Ptr(math.Inf(1)),
+		CumulativeCount: uint64Ptr(0),
+	})
+
+	return &dto.Histogram{
+		SampleCount: uint64Ptr(0),
+		SampleSum:   float64Ptr(0),
+		Bucket:      histogramBuckets,
+	}
+}
+
+func uint64Ptr(u uint64) *uint64 {
+	return &u
 }
 
 func findOrCreateMetric(family *dto.MetricFamily, labels map[string]string) *dto.Metric {
