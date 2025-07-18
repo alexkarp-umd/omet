@@ -306,15 +306,116 @@ func TestSetGauge(t *testing.T) {
 }
 
 func TestObserveHistogram(t *testing.T) {
-	// This test should fail since the function is not implemented
-	families := make(map[string]*dto.MetricFamily)
-	labels := map[string]string{}
+	tests := []struct {
+		name        string
+		families    map[string]*dto.MetricFamily
+		metricName  string
+		labels      map[string]string
+		value       float64
+		expectError bool
+		validate    func(t *testing.T, families map[string]*dto.MetricFamily)
+	}{
+		{
+			name:       "create new histogram with single observation",
+			families:   make(map[string]*dto.MetricFamily),
+			metricName: "response_time_seconds",
+			labels:     map[string]string{},
+			value:      0.123,
+			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
+				family, exists := families["response_time_seconds"]
+				require.True(t, exists, "histogram family should be created")
+				assert.Equal(t, dto.MetricType_HISTOGRAM, family.GetType())
+				
+				// Should have one metric
+				require.Len(t, family.Metric, 1)
+				metric := family.Metric[0]
+				
+				// Should have histogram data
+				require.NotNil(t, metric.Histogram, "metric should have histogram data")
+				
+				// Should have count = 1 (one observation)
+				assert.Equal(t, uint64(1), metric.Histogram.GetSampleCount())
+				
+				// Should have sum = 0.123 (the observed value)
+				assert.Equal(t, 0.123, metric.Histogram.GetSampleSum())
+				
+				// Should have buckets (at least the +Inf bucket)
+				buckets := metric.Histogram.GetBucket()
+				require.NotEmpty(t, buckets, "should have at least one bucket")
+				
+				// The +Inf bucket should have count = 1
+				infBucket := buckets[len(buckets)-1]
+				assert.True(t, infBucket.GetUpperBound() > 1e10, "last bucket should be +Inf")
+				assert.Equal(t, uint64(1), infBucket.GetCumulativeCount())
+			},
+		},
+		{
+			name:       "add observation to existing histogram",
+			families:   createTestHistogramFamily("response_time_seconds", []float64{0.1}, []uint64{1}, 1, 0.1),
+			metricName: "response_time_seconds",
+			labels:     map[string]string{},
+			value:      0.2,
+			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
+				family := families["response_time_seconds"]
+				metric := family.Metric[0]
+				
+				// Should have count = 2 (original 1 + new 1)
+				assert.Equal(t, uint64(2), metric.Histogram.GetSampleCount())
+				
+				// Should have sum = 0.3 (original 0.1 + new 0.2)
+				assert.Equal(t, 0.3, metric.Histogram.GetSampleSum())
+			},
+		},
+		{
+			name:       "observe with labels",
+			families:   make(map[string]*dto.MetricFamily),
+			metricName: "request_duration",
+			labels:     map[string]string{"method": "GET", "status": "200"},
+			value:      0.05,
+			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
+				family := families["request_duration"]
+				metric := family.Metric[0]
+				
+				// Should have the correct labels
+				assert.Len(t, metric.Label, 2)
+				
+				// Should have histogram data
+				assert.Equal(t, uint64(1), metric.Histogram.GetSampleCount())
+				assert.Equal(t, 0.05, metric.Histogram.GetSampleSum())
+			},
+		},
+		{
+			name:        "error on counter type",
+			families:    createTestCounterFamily("test_counter", 5.0),
+			metricName:  "test_counter",
+			labels:      map[string]string{},
+			value:       0.123,
+			expectError: true,
+		},
+		{
+			name:        "error on gauge type",
+			families:    createTestGaugeFamily("test_gauge", 10.0),
+			metricName:  "test_gauge",
+			labels:      map[string]string{},
+			value:       0.123,
+			expectError: true,
+		},
+	}
 
-	err := observeHistogram(families, "test_histogram", labels, 0.123)
-
-	// We expect this to fail with "not yet implemented" error
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := observeHistogram(tt.families, tt.metricName, tt.labels, tt.value)
+			
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				if tt.validate != nil {
+					tt.validate(t, tt.families)
+				}
+			}
+		})
+	}
 }
 
 func TestLabelsMatch(t *testing.T) {
@@ -458,6 +559,43 @@ func createTestGaugeFamily(name string, value float64) map[string]*dto.MetricFam
 		Metric: []*dto.Metric{
 			{
 				Gauge: &dto.Gauge{Value: &value},
+			},
+		},
+	}
+	return families
+}
+
+func createTestHistogramFamily(name string, bucketBounds []float64, bucketCounts []uint64, sampleCount uint64, sampleSum float64) map[string]*dto.MetricFamily {
+	families := make(map[string]*dto.MetricFamily)
+	metricType := dto.MetricType_HISTOGRAM
+	
+	// Create buckets
+	var buckets []*dto.Bucket
+	for i, bound := range bucketBounds {
+		buckets = append(buckets, &dto.Bucket{
+			UpperBound:      &bound,
+			CumulativeCount: &bucketCounts[i],
+		})
+	}
+	
+	// Add +Inf bucket
+	infBound := float64(1e10) // Represents +Inf
+	buckets = append(buckets, &dto.Bucket{
+		UpperBound:      &infBound,
+		CumulativeCount: &sampleCount,
+	})
+	
+	families[name] = &dto.MetricFamily{
+		Name: &name,
+		Type: &metricType,
+		Help: stringPtr("Test histogram"),
+		Metric: []*dto.Metric{
+			{
+				Histogram: &dto.Histogram{
+					SampleCount: &sampleCount,
+					SampleSum:   &sampleSum,
+					Bucket:      buckets,
+				},
 			},
 		},
 	}
