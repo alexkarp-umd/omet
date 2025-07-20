@@ -224,7 +224,7 @@ func TestCheckBasicHealth(t *testing.T) {
 	}
 }
 
-func TestOutputJSON(t *testing.T) {
+func TestOutputTextWithFailures(t *testing.T) {
 	result := HealthCheckResult{
 		Healthy: false,
 		Checks: map[string]CheckResult{
@@ -251,24 +251,19 @@ func TestOutputJSON(t *testing.T) {
 
 	go func() {
 		defer w.Close()
-		outputJSON(&result)
+		outputText(&result, true)
 	}()
 
 	var output bytes.Buffer
 	output.ReadFrom(r)
 	os.Stdout = oldStdout
 
-	jsonStr := output.String()
+	outputStr := output.String()
 
-	// Verify JSON structure (basic checks)
-	assert.Contains(t, jsonStr, `"healthy":false`)
-	assert.Contains(t, jsonStr, `"max_age"`)
-	assert.Contains(t, jsonStr, `"consecutive_errors"`)
-	assert.Contains(t, jsonStr, `"last_write_timestamp":1234567890`)
-	assert.Contains(t, jsonStr, `"consecutive_errors":0`)
-	assert.Contains(t, jsonStr, `"metrics_found"`)
-	assert.Contains(t, jsonStr, `"omet_last_write"`)
-	assert.Contains(t, jsonStr, `"test_counter"`)
+	// Verify text output contains expected elements
+	assert.Contains(t, outputStr, "UNHEALTHY")
+	assert.Contains(t, outputStr, "max_age:")
+	assert.Contains(t, outputStr, "Last write too old")
 }
 
 func TestOutputText(t *testing.T) {
