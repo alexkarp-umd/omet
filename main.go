@@ -152,8 +152,8 @@ func runOmet(ctx *cli.Context) error {
 		return fmt.Errorf("failed to apply operation: %w", err)
 	}
 
-	// Write output
-	err = writeMetrics(families, os.Stdout)
+	// Write output with self-monitoring
+	err = writeMetricsWithSelfMonitoring(families, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("failed to write metrics: %w", err)
 	}
@@ -386,10 +386,8 @@ func createLabelPairs(labels map[string]string) []*dto.LabelPair {
 	return labelPairs
 }
 
+// writeMetrics serializes metric families to text format (pure function)
 func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error {
-	// Add self-monitoring metrics
-	addSelfMonitoringMetrics(families)
-
 	// Convert back to text format
 	for _, family := range families {
 		// Write HELP line
@@ -452,6 +450,12 @@ func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error
 	}
 
 	return nil
+}
+
+// writeMetricsWithSelfMonitoring adds self-monitoring metrics and writes output
+func writeMetricsWithSelfMonitoring(families map[string]*dto.MetricFamily, output io.Writer) error {
+	addSelfMonitoringMetrics(families)
+	return writeMetrics(families, output)
 }
 
 func stringPtr(s string) *string {
