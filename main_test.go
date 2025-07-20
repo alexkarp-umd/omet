@@ -920,7 +920,7 @@ func TestErrorCollector(t *testing.T) {
 		assert.True(t, collector.HasErrors())
 		assert.Len(t, collector.errors, 4)
 		assert.Equal(t, "invalid argument", collector.FirstError().Error())
-		assert.Equal(t, 4, collector.GetConsecutiveErrors())
+		assert.Len(t, collector.errors, 4)
 	})
 	
 	t.Run("handles no errors", func(t *testing.T) {

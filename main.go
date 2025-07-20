@@ -199,13 +199,10 @@ func runOmet(ctx *cli.Context) error {
 	}
 
 	// Apply the operation (best effort)
-	operationSuccessful := false
 	if !errorCollector.HasErrors() || (labels != nil && value != 0) {
 		err = applyOperation(families, metricName, operation, labels, value)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to apply operation: %w", err), "operation_error")
-		} else {
-			operationSuccessful = true
 		}
 	}
 
