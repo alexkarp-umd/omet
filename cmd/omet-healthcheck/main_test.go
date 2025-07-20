@@ -245,7 +245,6 @@ func TestOutputJSON(t *testing.T) {
 	}
 
 	// Capture output
-	var buf bytes.Buffer
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
@@ -307,7 +306,6 @@ func TestOutputText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Capture output
-			var buf bytes.Buffer
 			oldStdout := os.Stdout
 			r, w, _ := os.Pipe()
 			os.Stdout = w
