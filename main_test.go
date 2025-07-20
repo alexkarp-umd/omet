@@ -771,19 +771,27 @@ func TestAddOperationalMetrics(t *testing.T) {
 		assert.NotContains(t, families, "omet_input_bytes_total")
 	})
 	
-	t.Run("adds process duration gauge", func(t *testing.T) {
+	t.Run("adds process duration histogram", func(t *testing.T) {
 		families := make(map[string]*dto.MetricFamily)
 		collector := &ErrorCollector{}
 		duration := time.Millisecond * 1500 // 1.5 seconds
 		
 		addOperationalMetrics(families, "set", 1024, duration, collector)
 		
-		// Verify duration gauge was created
+		// Verify duration histogram was created
 		require.Contains(t, families, "omet_process_duration_seconds")
 		durationFamily := families["omet_process_duration_seconds"]
-		assert.Equal(t, dto.MetricType_GAUGE, durationFamily.GetType())
-		assert.Equal(t, "Duration of the last OMET operation in seconds", durationFamily.GetHelp())
-		assert.Equal(t, 1.5, durationFamily.Metric[0].GetGauge().GetValue())
+		assert.Equal(t, dto.MetricType_HISTOGRAM, durationFamily.GetType())
+		assert.Equal(t, "Duration of OMET operations in seconds", durationFamily.GetHelp())
+		
+		// Should have one metric with histogram data
+		assert.Len(t, durationFamily.Metric, 1)
+		metric := durationFamily.Metric[0]
+		require.NotNil(t, metric.Histogram)
+		
+		// Should have recorded the 1.5 second observation
+		assert.Equal(t, uint64(1), metric.Histogram.GetSampleCount())
+		assert.Equal(t, 1.5, metric.Histogram.GetSampleSum())
 	})
 	
 	t.Run("adds consecutive errors gauge for failed run", func(t *testing.T) {
@@ -866,7 +874,9 @@ func TestOperationalMetricsIntegration(t *testing.T) {
 		assert.Contains(t, output, "omet_input_bytes_total 2048", "should include input bytes count")
 		
 		assert.Contains(t, output, "# HELP omet_process_duration_seconds", "should include duration help")
-		assert.Contains(t, output, "omet_process_duration_seconds 0.75", "should include duration value")
+		assert.Contains(t, output, "omet_process_duration_seconds_count 1", "should include duration count")
+		assert.Contains(t, output, "omet_process_duration_seconds_sum 0.75", "should include duration sum")
+		assert.Contains(t, output, "omet_process_duration_seconds_bucket", "should include duration buckets")
 		
 		assert.Contains(t, output, "# HELP omet_consecutive_errors_total", "should include consecutive errors help")
 		assert.Contains(t, output, "omet_consecutive_errors_total 0", "should show zero consecutive errors")
