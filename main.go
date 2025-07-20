@@ -389,7 +389,7 @@ func createLabelPairs(labels map[string]string) []*dto.LabelPair {
 func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error {
 	// Add self-monitoring metrics
 	addSelfMonitoringMetrics(families)
-	
+
 	// Convert back to text format
 	for _, family := range families {
 		// Write HELP line
@@ -469,18 +469,18 @@ func addSelfMonitoringMetrics(families map[string]*dto.MetricFamily) {
 		metric := findOrCreateMetric(lastWriteFamily, map[string]string{})
 		currentTime := float64(timeProvider.Now().Unix())
 		metric.Gauge = &dto.Gauge{Value: &currentTime}
-		
+
 		// Set help text if not already set
 		if lastWriteFamily.Help == nil {
 			lastWriteFamily.Help = stringPtr("Unix timestamp of last OMET write operation")
 		}
 	}
-	
+
 	// Add omet_modifications_total counter
 	modificationsFamily, err := getOrCreateFamily(families, "omet_modifications_total", dto.MetricType_COUNTER)
 	if err == nil {
 		metric := findOrCreateMetric(modificationsFamily, map[string]string{})
-		
+
 		// Initialize or increment counter
 		if metric.Counter == nil {
 			metric.Counter = &dto.Counter{Value: float64Ptr(1.0)}
@@ -488,7 +488,7 @@ func addSelfMonitoringMetrics(families map[string]*dto.MetricFamily) {
 			currentValue := metric.Counter.GetValue()
 			metric.Counter.Value = float64Ptr(currentValue + 1.0)
 		}
-		
+
 		// Set help text if not already set
 		if modificationsFamily.Help == nil {
 			modificationsFamily.Help = stringPtr("Total number of OMET modification operations")
