@@ -58,6 +58,9 @@ func (ec *ErrorCollector) FirstError() error {
 // Standard histogram buckets for response times (in seconds)
 var defaultHistogramBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
+// Duration histogram buckets for processing times (in seconds)
+var durationHistogramBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+
 func main() {
 	app := &cli.App{
 		Name:  "omet",
@@ -351,6 +354,10 @@ func getOrCreateFamily(families map[string]*dto.MetricFamily, name string, metri
 }
 
 func observeHistogram(families map[string]*dto.MetricFamily, name string, labels map[string]string, value float64) error {
+	return observeHistogramWithBuckets(families, name, labels, value, defaultHistogramBuckets)
+}
+
+func observeHistogramWithBuckets(families map[string]*dto.MetricFamily, name string, labels map[string]string, value float64, buckets []float64) error {
 	family, err := getOrCreateFamily(families, name, dto.MetricType_HISTOGRAM)
 	if err != nil {
 		return err
@@ -360,7 +367,7 @@ func observeHistogram(families map[string]*dto.MetricFamily, name string, labels
 
 	// Initialize histogram if it doesn't exist
 	if metric.Histogram == nil {
-		metric.Histogram = createHistogram(defaultHistogramBuckets)
+		metric.Histogram = createHistogram(buckets)
 	}
 
 	// Update sample count and sum
@@ -632,13 +639,15 @@ func addOperationalMetrics(families map[string]*dto.MetricFamily, operation stri
 		}
 	}
 
-	// Add omet_process_duration_seconds gauge
-	durationFamily, err := getOrCreateFamily(families, "omet_process_duration_seconds", dto.MetricType_GAUGE)
+	// Add omet_process_duration_seconds histogram
+	durationFamily, err := getOrCreateFamily(families, "omet_process_duration_seconds", dto.MetricType_HISTOGRAM)
 	if err == nil {
-		durationFamily.Help = stringPtr("Duration of the last OMET operation in seconds")
-		metric := findOrCreateMetric(durationFamily, map[string]string{})
+		durationFamily.Help = stringPtr("Duration of OMET operations in seconds")
 		durationSeconds := processingDuration.Seconds()
-		metric.Gauge = &dto.Gauge{Value: &durationSeconds}
+		err := observeHistogramWithBuckets(families, "omet_process_duration_seconds", map[string]string{}, durationSeconds, durationHistogramBuckets)
+		if err != nil {
+			// Log error but continue - this is just operational metrics
+		}
 	}
 
 	// Add omet_consecutive_errors_total gauge
