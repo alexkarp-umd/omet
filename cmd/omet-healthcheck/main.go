@@ -51,10 +51,6 @@ Exit codes:
 				Usage: "Check that specified metric exists",
 			},
 			&cli.BoolFlag{
-				Name:  "json",
-				Usage: "Output results in JSON format",
-			},
-			&cli.BoolFlag{
 				Name:  "verbose",
 				Usage: "Enable verbose output",
 			},
@@ -65,28 +61,24 @@ Exit codes:
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		if ctx := cli.NewContext(app, nil, nil); ctx.Bool("json") {
-			fmt.Printf(`{"healthy":false,"error":"%s"}`+"\n", err.Error())
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(2)
 	}
 }
 
 type HealthCheckResult struct {
-	Healthy              bool                   `json:"healthy"`
-	Checks               map[string]CheckResult `json:"checks,omitempty"`
-	Error                string                 `json:"error,omitempty"`
-	LastWriteTimestamp   *int64                 `json:"last_write_timestamp,omitempty"`
-	ConsecutiveErrors    *float64               `json:"consecutive_errors,omitempty"`
-	MetricsFound         []string               `json:"metrics_found,omitempty"`
+	Healthy              bool
+	Checks               map[string]CheckResult
+	Error                string
+	LastWriteTimestamp   *int64
+	ConsecutiveErrors    *float64
+	MetricsFound         []string
 }
 
 type CheckResult struct {
-	Passed  bool   `json:"passed"`
-	Message string `json:"message"`
-	Value   string `json:"value,omitempty"`
+	Passed  bool
+	Message string
+	Value   string
 }
 
 func checkHealth(ctx *cli.Context) error {
@@ -96,9 +88,8 @@ func checkHealth(ctx *cli.Context) error {
 
 	filename := ctx.Args().Get(0)
 	verbose := ctx.Bool("verbose")
-	jsonOutput := ctx.Bool("json")
 
-	if verbose && !jsonOutput {
+	if verbose {
 		log.Printf("Checking health of metrics file: %s", filename)
 	}
 
@@ -108,7 +99,7 @@ func checkHealth(ctx *cli.Context) error {
 		return fmt.Errorf("failed to parse metrics file: %w", err)
 	}
 
-	if verbose && !jsonOutput {
+	if verbose {
 		log.Printf("Parsed %d metric families", len(families))
 	}
 
@@ -121,36 +112,30 @@ func checkHealth(ctx *cli.Context) error {
 	// Check 1: Max age (if specified)
 	if ctx.IsSet("max-age") {
 		maxAge := ctx.Duration("max-age")
-		checkMaxAge(families, maxAge, &result, verbose && !jsonOutput)
+		checkMaxAge(families, maxAge, &result, verbose)
 	}
 
 	// Check 2: Max consecutive errors (if specified)
 	if ctx.IsSet("max-consecutive-errors") {
 		maxErrors := ctx.Int("max-consecutive-errors")
 		if maxErrors >= 0 {
-			checkConsecutiveErrors(families, maxErrors, &result, verbose && !jsonOutput)
+			checkConsecutiveErrors(families, maxErrors, &result, verbose)
 		}
 	}
 
 	// Check 3: Metric exists (if specified)
 	if ctx.IsSet("metric-exists") {
 		metricName := ctx.String("metric-exists")
-		checkMetricExists(families, metricName, &result, verbose && !jsonOutput)
+		checkMetricExists(families, metricName, &result, verbose)
 	}
 
 	// If no specific checks were requested, do basic health check
 	if !ctx.IsSet("max-age") && !ctx.IsSet("max-consecutive-errors") && !ctx.IsSet("metric-exists") {
-		checkBasicHealth(families, &result, verbose && !jsonOutput)
+		checkBasicHealth(families, &result, verbose)
 	}
 
 	// Output results
-	if jsonOutput {
-		if err := outputJSON(&result); err != nil {
-			return fmt.Errorf("failed to output JSON: %w", err)
-		}
-	} else {
-		outputText(&result, verbose)
-	}
+	outputText(&result, verbose)
 
 	// Exit with appropriate code
 	if !result.Healthy {
@@ -353,53 +338,6 @@ func checkBasicHealth(families map[string]*dto.MetricFamily, result *HealthCheck
 	}
 }
 
-func outputJSON(result *HealthCheckResult) error {
-	// Simple JSON output without external dependencies
-	fmt.Printf(`{"healthy":%t`, result.Healthy)
-	
-	if len(result.Checks) > 0 {
-		fmt.Printf(`,"checks":{`)
-		first := true
-		for name, check := range result.Checks {
-			if !first {
-				fmt.Printf(",")
-			}
-			fmt.Printf(`"%s":{"passed":%t,"message":"%s"`, name, check.Passed, check.Message)
-			if check.Value != "" {
-				fmt.Printf(`,"value":"%s"`, check.Value)
-			}
-			fmt.Printf("}")
-			first = false
-		}
-		fmt.Printf("}")
-	}
-	
-	if result.LastWriteTimestamp != nil {
-		fmt.Printf(`,"last_write_timestamp":%d`, *result.LastWriteTimestamp)
-	}
-	
-	if result.ConsecutiveErrors != nil {
-		fmt.Printf(`,"consecutive_errors":%.0f`, *result.ConsecutiveErrors)
-	}
-	
-	if len(result.MetricsFound) > 0 {
-		fmt.Printf(`,"metrics_found":[`)
-		for i, metric := range result.MetricsFound {
-			if i > 0 {
-				fmt.Printf(",")
-			}
-			fmt.Printf(`"%s"`, metric)
-		}
-		fmt.Printf("]")
-	}
-	
-	if result.Error != "" {
-		fmt.Printf(`,"error":"%s"`, result.Error)
-	}
-	
-	fmt.Printf("}\n")
-	return nil
-}
 
 func outputText(result *HealthCheckResult, verbose bool) {
 	if result.Healthy {
