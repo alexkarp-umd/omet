@@ -13,6 +13,8 @@ import (
 )
 
 func main() {
+	fmt.Printf("DEBUG: Starting with args: %v\n", os.Args)
+	
 	app := &cli.App{
 		Name:  "omet-healthcheck",
 		Usage: "Health check tool for OMET metrics",
@@ -85,12 +87,28 @@ type CheckResult struct {
 }
 
 func checkHealth(ctx *cli.Context) error {
+	// DEBUG: Print raw CLI context info
+	fmt.Printf("DEBUG: Raw args: %v\n", os.Args)
+	fmt.Printf("DEBUG: ctx.NArg()=%d\n", ctx.NArg())
+	fmt.Printf("DEBUG: ctx.Args().Slice()=%v\n", ctx.Args().Slice())
+	
 	if ctx.NArg() == 0 {
 		return fmt.Errorf("missing required argument: metrics_file")
 	}
 
 	filename := ctx.Args().Get(0)
 	verbose := ctx.Bool("verbose")
+
+	// DEBUG: Print what we're getting from CLI parsing
+	fmt.Printf("DEBUG: filename=%s\n", filename)
+	fmt.Printf("DEBUG: max-age set=%v, value=%v\n", ctx.IsSet("max-age"), ctx.Duration("max-age"))
+	fmt.Printf("DEBUG: max-consecutive-errors set=%v, value=%v\n", ctx.IsSet("max-consecutive-errors"), ctx.Int("max-consecutive-errors"))
+	fmt.Printf("DEBUG: metric-exists set=%v, value=%s\n", ctx.IsSet("metric-exists"), ctx.String("metric-exists"))
+	fmt.Printf("DEBUG: verbose set=%v, value=%v\n", ctx.IsSet("verbose"), verbose)
+
+	// DEBUG: Check if any flags are set at all
+	fmt.Printf("DEBUG: Any flags set? max-age=%v, max-consecutive-errors=%v, metric-exists=%v, verbose=%v\n",
+		ctx.IsSet("max-age"), ctx.IsSet("max-consecutive-errors"), ctx.IsSet("metric-exists"), ctx.IsSet("verbose"))
 
 	if verbose {
 		log.Printf("Checking health of metrics file: %s", filename)
@@ -112,30 +130,47 @@ func checkHealth(ctx *cli.Context) error {
 		Checks:  make(map[string]CheckResult),
 	}
 
+	// DEBUG: Show which checks we're about to run
+	fmt.Printf("DEBUG: About to check conditions...\n")
+
 	// Check 1: Max age (if specified)
 	if ctx.IsSet("max-age") {
+		fmt.Printf("DEBUG: Running max-age check\n")
 		maxAge := ctx.Duration("max-age")
 		checkMaxAge(families, maxAge, &result, verbose)
+	} else {
+		fmt.Printf("DEBUG: Skipping max-age check (not set)\n")
 	}
 
 	// Check 2: Max consecutive errors (if specified)
 	if ctx.IsSet("max-consecutive-errors") {
+		fmt.Printf("DEBUG: Running max-consecutive-errors check\n")
 		maxErrors := ctx.Int("max-consecutive-errors")
 		if maxErrors >= 0 {
 			checkConsecutiveErrors(families, maxErrors, &result, verbose)
 		}
+	} else {
+		fmt.Printf("DEBUG: Skipping max-consecutive-errors check (not set)\n")
 	}
 
 	// Check 3: Metric exists (if specified)
 	if ctx.IsSet("metric-exists") {
+		fmt.Printf("DEBUG: Running metric-exists check\n")
 		metricName := ctx.String("metric-exists")
 		checkMetricExists(families, metricName, &result, verbose)
+	} else {
+		fmt.Printf("DEBUG: Skipping metric-exists check (not set)\n")
 	}
 
 	// If no specific checks were requested, do basic health check
 	if !ctx.IsSet("max-age") && !ctx.IsSet("max-consecutive-errors") && !ctx.IsSet("metric-exists") {
+		fmt.Printf("DEBUG: Running basic health check (no specific checks requested)\n")
 		checkBasicHealth(families, &result, verbose)
+	} else {
+		fmt.Printf("DEBUG: Skipping basic health check (specific checks were requested)\n")
 	}
+
+	fmt.Printf("DEBUG: Final result.Healthy=%v\n", result.Healthy)
 
 	// Output results
 	outputText(&result, verbose)
