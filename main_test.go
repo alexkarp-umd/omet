@@ -877,6 +877,7 @@ func TestOperationalMetricsIntegration(t *testing.T) {
 		collector.AddError(fmt.Errorf("operation error"), "operation_error")
 		
 		addOperationalMetrics(families, "set", 1024, time.Second, collector)
+		addErrorMetrics(families, collector)
 
 		var buf bytes.Buffer
 		err := writeMetricsWithSelfMonitoring(families, &buf)
