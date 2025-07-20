@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omet-config
+  namespace: monitoring
+data:
+  # Script that generates business metrics and feeds them to OMET
+  collect-metrics.sh: |
+    #!/bin/bash
+    set -e
+    
+    METRICS_FILE="/shared/metrics.prom"
+    
+    # Collect application metrics (example)
+    APP_UPTIME=$(cat /proc/uptime | cut -d' ' -f1)
+    MEMORY_USAGE=$(cat /proc/meminfo | grep MemAvailable | awk '{print $2}')
+    ACTIVE_CONNECTIONS=$(netstat -an 2>/dev/null | grep ESTABLISHED | wc -l || echo "0")
+    
+    # Use OMET to update metrics
+    echo "$APP_UPTIME" | /usr/local/bin/omet -f "$METRICS_FILE" -l service=myapp -l pod="$HOSTNAME" app_uptime_seconds set > "$METRICS_FILE.tmp" && mv "$METRICS_FILE.tmp" "$METRICS_FILE"
+    echo "$MEMORY_USAGE" | /usr/local/bin/omet -f "$METRICS_FILE" -l service=myapp -l pod="$HOSTNAME" memory_available_kb set > "$METRICS_FILE.tmp" && mv "$METRICS_FILE.tmp" "$METRICS_FILE"
+    echo "$ACTIVE_CONNECTIONS" | /usr/local/bin/omet -f "$METRICS_FILE" -l service=myapp -l pod="$HOSTNAME" network_connections_active set > "$METRICS_FILE.tmp" && mv "$METRICS_FILE.tmp" "$METRICS_FILE"
+    
+    # Increment request counter (example)
+    /usr/local/bin/omet -f "$METRICS_FILE" -l service=myapp -l pod="$HOSTNAME" -l status=success requests_total inc 1 > "$METRICS_FILE.tmp" && mv "$METRICS_FILE.tmp" "$METRICS_FILE"
+
+  # Health check script for readiness probe
+  readiness-check.sh: |
+    #!/bin/bash
+    
+    METRICS_FILE="/shared/metrics.prom"
+    MAX_AGE_SECONDS=300  # 5 minutes
+    
+    # Check if metrics file exists
+    if [[ ! -f "$METRICS_FILE" ]]; then
+      echo "FAIL: Metrics file not found"
+      exit 1
+    fi
+    
+    # Check if OMET has written recently
+    if ! grep -q "omet_last_write" "$METRICS_FILE"; then
+      echo "FAIL: No omet_last_write metric found"
+      exit 1
+    fi
+    
+    # Extract last write timestamp
+    LAST_WRITE=$(grep "omet_last_write " "$METRICS_FILE" | awk '{print $2}' | cut -d'e' -f1)
+    CURRENT_TIME=$(date +%s)
+    AGE=$((CURRENT_TIME - ${LAST_WRITE%.*}))
+    
+    if [[ $AGE -gt $MAX_AGE_SECONDS ]]; then
+      echo "FAIL: Metrics too old (${AGE}s > ${MAX_AGE_SECONDS}s)"
+      exit 1
+    fi
+    
+    echo "OK: Metrics are fresh (${AGE}s old)"
+    exit 0
+
+  # Health check script for liveness probe  
+  liveness-check.sh: |
+    #!/bin/bash
+    
+    METRICS_FILE="/shared/metrics.prom"
+    MAX_CONSECUTIVE_ERRORS=10
+    
+    # Check if metrics file exists
+    if [[ ! -f "$METRICS_FILE" ]]; then
+      echo "FAIL: Metrics file not found"
+      exit 1
+    fi
+    
+    # Check consecutive errors
+    if grep -q "omet_consecutive_errors_total" "$METRICS_FILE"; then
+      CONSECUTIVE_ERRORS=$(grep "omet_consecutive_errors_total " "$METRICS_FILE" | awk '{print $2}' | cut -d'e' -f1)
+      if [[ ${CONSECUTIVE_ERRORS%.*} -gt $MAX_CONSECUTIVE_ERRORS ]]; then
+        echo "FAIL: Too many consecutive errors (${CONSECUTIVE_ERRORS%.*} > $MAX_CONSECUTIVE_ERRORS)"
+        exit 1
+      fi
+    fi
+    
+    echo "OK: Error count acceptable"
+    exit 0
+
+  # Initial empty metrics file
+  initial-metrics.prom: |
+    # Initial metrics file for OMET
+    # This will be populated by the metrics collection process

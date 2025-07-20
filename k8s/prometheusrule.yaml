@@ -1,0 +1,50 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: omet-alerts
+  namespace: monitoring
+  labels:
+    app: myapp
+spec:
+  groups:
+  - name: omet.rules
+    rules:
+    # Alert when OMET stops writing metrics
+    - alert: OMETMetricsStale
+      expr: (time() - omet_last_write) > 300
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "OMET metrics are stale"
+        description: "OMET hasn't written metrics for {{ $value }} seconds on {{ $labels.instance }}"
+
+    # Alert when OMET has too many consecutive errors
+    - alert: OMETConsecutiveErrors
+      expr: omet_consecutive_errors_total > 5
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "OMET has consecutive errors"
+        description: "OMET has {{ $value }} consecutive errors on {{ $labels.instance }}"
+
+    # Alert when error rate is high
+    - alert: OMETHighErrorRate
+      expr: rate(omet_errors_total[5m]) > 0.1
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "OMET error rate is high"
+        description: "OMET error rate is {{ $value }} errors/sec on {{ $labels.instance }}"
+
+    # Alert when processing time is high
+    - alert: OMETSlowProcessing
+      expr: omet_process_duration_seconds > 10
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        summary: "OMET processing is slow"
+        description: "OMET took {{ $value }} seconds to process metrics on {{ $labels.instance }}"
