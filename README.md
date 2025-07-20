@@ -31,13 +31,22 @@ Perfect for:
 ```bash
 git clone https://github.com/alexkarp-umd/omet.git
 cd omet
+
+# Build main tool
 go build -o omet
+
+# Build health check tool
+go build -o omet-healthcheck ./cmd/omet-healthcheck
 ```
 
 ### Using Go Install
 
 ```bash
+# Install main tool
 go install github.com/alexkarp-umd/omet@latest
+
+# Install health check tool
+go install github.com/alexkarp-umd/omet/cmd/omet-healthcheck@latest
 ```
 
 ## Usage
@@ -260,6 +269,98 @@ Benchmarks on a MacBook Pro M1:
 - Transform 10K metrics: ~5ms
 - Memory usage: <10MB
 
+## Health Checking
+
+OMET includes `omet-healthcheck` - a fast, reliable health check tool for monitoring OMET-generated metrics files.
+
+### Usage
+
+```bash
+# Basic health check
+omet-healthcheck /shared/metrics.prom
+
+# Check if metrics were written recently
+omet-healthcheck /shared/metrics.prom --max-age=300s
+
+# Check consecutive error count
+omet-healthcheck /shared/metrics.prom --max-consecutive-errors=10
+
+# Check if specific metric exists
+omet-healthcheck /shared/metrics.prom --metric-exists=omet_last_write
+
+# Multiple checks (all must pass)
+omet-healthcheck /shared/metrics.prom --max-age=300s --max-consecutive-errors=5
+
+# JSON output for structured logging
+omet-healthcheck /shared/metrics.prom --json --max-age=300s
+```
+
+### Exit Codes
+
+- `0` = Healthy (all checks passed)
+- `1` = Unhealthy (one or more checks failed)  
+- `2` = Error (file not found, parse error, etc.)
+
+### Kubernetes Integration
+
+Perfect for Kubernetes liveness and readiness probes:
+
+```yaml
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: metrics-collector
+    image: myapp:latest
+    livenessProbe:
+      exec:
+        command: ["/usr/local/bin/omet-healthcheck", "/shared/metrics.prom", "--max-consecutive-errors=10"]
+      initialDelaySeconds: 60
+      periodSeconds: 60
+      timeoutSeconds: 10
+      failureThreshold: 3
+    readinessProbe:
+      exec:
+        command: ["/usr/local/bin/omet-healthcheck", "/shared/metrics.prom", "--max-age=300s"]
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      timeoutSeconds: 5
+      failureThreshold: 2
+```
+
+### Health Check Options
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--max-age` | Maximum age since last write | `--max-age=300s` |
+| `--max-consecutive-errors` | Maximum consecutive errors allowed | `--max-consecutive-errors=10` |
+| `--metric-exists` | Check that specific metric exists | `--metric-exists=omet_last_write` |
+| `--json` | Output results in JSON format | `--json` |
+| `--verbose` | Enable verbose output | `--verbose` |
+
+### JSON Output Format
+
+```json
+{
+  "healthy": false,
+  "checks": {
+    "max_age": {
+      "passed": false,
+      "message": "Last write too old: 10m0s (max: 5m0s)",
+      "value": "10m0s"
+    },
+    "consecutive_errors": {
+      "passed": true,
+      "message": "Consecutive errors OK: 0 (max: 5)",
+      "value": "0"
+    }
+  },
+  "last_write_timestamp": 1234567890,
+  "consecutive_errors": 0,
+  "metrics_found": ["omet_last_write", "test_counter"]
+}
+```
+
 ## Troubleshooting
 
 ### Common Issues
@@ -282,12 +383,19 @@ Error: invalid label format: env:prod (expected KEY=VALUE)
 ```
 A: Use `=` instead of `:`. Correct format: `-l env=prod`
 
+**Q: Health check failing**
+```
+UNHEALTHY - max_age: Last write too old: 10m0s (max: 5m0s)
+```
+A: OMET hasn't written metrics recently. Check if OMET process is running and has write permissions.
+
 ### Debug Mode
 
 Use `-v` flag for verbose output:
 
 ```bash
 omet -v -f metrics.txt -l env=prod request_count inc 1
+omet-healthcheck -v /shared/metrics.prom --max-age=300s
 ```
 
 ## License
