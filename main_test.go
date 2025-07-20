@@ -658,7 +658,7 @@ func TestHistogramDebug(t *testing.T) {
 		
 		// Test serialization
 		var buf bytes.Buffer
-		err = writeMetrics(families, &buf)
+		err = writeMetricsWithSelfMonitoring(families, &buf)
 		require.NoError(t, err)
 		
 		output := buf.String()
@@ -722,7 +722,7 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		
 		// Write metrics (this should add self-monitoring metrics)
 		var buf bytes.Buffer
-		err = writeMetrics(families, &buf)
+		err = writeMetricsWithSelfMonitoring(families, &buf)
 		require.NoError(t, err)
 		
 		// Verify self-monitoring metrics were added
@@ -759,7 +759,7 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		require.NoError(t, err)
 		
 		var buf1 bytes.Buffer
-		err = writeMetrics(families, &buf1)
+		err = writeMetricsWithSelfMonitoring(families, &buf1)
 		require.NoError(t, err)
 		
 		// Advance time and do second write
@@ -769,7 +769,7 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		require.NoError(t, err)
 		
 		var buf2 bytes.Buffer
-		err = writeMetrics(families, &buf2)
+		err = writeMetricsWithSelfMonitoring(families, &buf2)
 		require.NoError(t, err)
 		
 		// Verify counter incremented
@@ -800,7 +800,7 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		
 		// Write metrics
 		var buf bytes.Buffer
-		err = writeMetrics(families, &buf)
+		err = writeMetricsWithSelfMonitoring(families, &buf)
 		require.NoError(t, err)
 		
 		// Verify existing counter was incremented (not reset)
