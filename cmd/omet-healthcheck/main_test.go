@@ -428,19 +428,19 @@ omet_last_write 1.752981653e+09
 	}{
 		{
 			name:           "nonexistent metric should fail",
-			args:           []string{"omet-healthcheck", "--metric-exists=foobar", tmpFile.Name()},
+			args:           []string{"omet-healthcheck", "-f", tmpFile.Name(), "--metric-exists=foobar"},
 			expectHealthy:  false,
 			expectExitCode: 1,
 		},
 		{
 			name:           "very old timestamp should fail",
-			args:           []string{"omet-healthcheck", "--max-age=1s", tmpFile.Name()},
+			args:           []string{"omet-healthcheck", "-f", tmpFile.Name(), "--max-age=1s"},
 			expectHealthy:  false,
 			expectExitCode: 1,
 		},
 		{
 			name:           "zero consecutive errors allowed should pass (no consecutive errors metric)",
-			args:           []string{"omet-healthcheck", "--max-consecutive-errors=0", tmpFile.Name()},
+			args:           []string{"omet-healthcheck", "-f", tmpFile.Name(), "--max-consecutive-errors=0"},
 			expectHealthy:  true,
 			expectExitCode: 0,
 		},
