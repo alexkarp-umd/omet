@@ -705,3 +705,117 @@ func TestHistogramDebug(t *testing.T) {
 		t.Logf("Serialized output:\n%s", output)
 	})
 }
+
+func TestSelfMonitoringMetrics(t *testing.T) {
+	t.Run("adds self-monitoring metrics on write", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		
+		// Add a regular metric
+		err := incrementCounter(families, "test_counter", map[string]string{"env": "test"}, 1.0)
+		require.NoError(t, err)
+		
+		// Write metrics (this should add self-monitoring metrics)
+		var buf bytes.Buffer
+		err = writeMetrics(families, &buf)
+		require.NoError(t, err)
+		
+		// Verify self-monitoring metrics were added
+		assert.Contains(t, families, "omet_last_write", "should add omet_last_write metric")
+		assert.Contains(t, families, "omet_modifications_total", "should add omet_modifications_total metric")
+		
+		// Verify omet_last_write is a gauge with recent timestamp
+		lastWriteFamily := families["omet_last_write"]
+		assert.Equal(t, dto.MetricType_GAUGE, lastWriteFamily.GetType())
+		assert.Len(t, lastWriteFamily.Metric, 1)
+		
+		timestamp := lastWriteFamily.Metric[0].GetGauge().GetValue()
+		assert.Greater(t, timestamp, float64(1700000000), "timestamp should be reasonable (after 2023)")
+		
+		// Verify omet_modifications_total is a counter starting at 1
+		modificationsFamily := families["omet_modifications_total"]
+		assert.Equal(t, dto.MetricType_COUNTER, modificationsFamily.GetType())
+		assert.Len(t, modificationsFamily.Metric, 1)
+		
+		count := modificationsFamily.Metric[0].GetCounter().GetValue()
+		assert.Equal(t, 1.0, count, "should start at 1 for first modification")
+	})
+	
+	t.Run("increments modification counter on subsequent writes", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		
+		// First write
+		err := incrementCounter(families, "test_counter", map[string]string{}, 1.0)
+		require.NoError(t, err)
+		
+		var buf1 bytes.Buffer
+		err = writeMetrics(families, &buf1)
+		require.NoError(t, err)
+		
+		// Second write
+		err = incrementCounter(families, "test_counter", map[string]string{}, 1.0)
+		require.NoError(t, err)
+		
+		var buf2 bytes.Buffer
+		err = writeMetrics(families, &buf2)
+		require.NoError(t, err)
+		
+		// Verify counter incremented
+		modificationsFamily := families["omet_modifications_total"]
+		count := modificationsFamily.Metric[0].GetCounter().GetValue()
+		assert.Equal(t, 2.0, count, "should increment to 2 after second write")
+		
+		// Verify timestamp updated
+		lastWriteFamily := families["omet_last_write"]
+		timestamp := lastWriteFamily.Metric[0].GetGauge().GetValue()
+		assert.Greater(t, timestamp, float64(1700000000), "timestamp should be updated")
+	})
+	
+	t.Run("preserves existing self-monitoring metrics", func(t *testing.T) {
+		// Start with existing self-monitoring metrics (simulating file read)
+		families := createTestCounterFamily("omet_modifications_total", 42.0)
+		gaugeFamily := createTestGaugeFamily("omet_last_write", 1234567890.0)
+		families["omet_last_write"] = gaugeFamily["omet_last_write"]
+		
+		// Add a regular metric
+		err := setGauge(families, "test_gauge", map[string]string{}, 100.0)
+		require.NoError(t, err)
+		
+		// Write metrics
+		var buf bytes.Buffer
+		err = writeMetrics(families, &buf)
+		require.NoError(t, err)
+		
+		// Verify existing counter was incremented (not reset)
+		modificationsFamily := families["omet_modifications_total"]
+		count := modificationsFamily.Metric[0].GetCounter().GetValue()
+		assert.Equal(t, 43.0, count, "should increment existing counter")
+		
+		// Verify timestamp was updated
+		lastWriteFamily := families["omet_last_write"]
+		timestamp := lastWriteFamily.Metric[0].GetGauge().GetValue()
+		assert.Greater(t, timestamp, 1234567890.0, "should update existing timestamp")
+	})
+	
+	t.Run("self-monitoring metrics appear in output", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		
+		// Add a metric and write
+		err := observeHistogram(families, "response_time", map[string]string{"service": "api"}, 0.123)
+		require.NoError(t, err)
+		
+		var buf bytes.Buffer
+		err = writeMetrics(families, &buf)
+		require.NoError(t, err)
+		
+		output := buf.String()
+		
+		// Verify self-monitoring metrics appear in output
+		assert.Contains(t, output, "# HELP omet_last_write", "should include help for omet_last_write")
+		assert.Contains(t, output, "# TYPE omet_last_write gauge", "should include type for omet_last_write")
+		assert.Contains(t, output, "omet_last_write ", "should include omet_last_write value")
+		
+		assert.Contains(t, output, "# HELP omet_modifications_total", "should include help for omet_modifications_total")
+		assert.Contains(t, output, "# TYPE omet_modifications_total counter", "should include type for omet_modifications_total")
+		assert.Contains(t, output, "omet_modifications_total ", "should include omet_modifications_total value")
+	})
+}

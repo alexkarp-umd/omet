@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
@@ -372,6 +373,9 @@ func createLabelPairs(labels map[string]string) []*dto.LabelPair {
 }
 
 func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error {
+	// Add self-monitoring metrics
+	addSelfMonitoringMetrics(families)
+	
 	// Convert back to text format
 	for _, family := range families {
 		// Write HELP line
@@ -442,4 +446,38 @@ func stringPtr(s string) *string {
 
 func float64Ptr(f float64) *float64 {
 	return &f
+}
+
+func addSelfMonitoringMetrics(families map[string]*dto.MetricFamily) {
+	// Add omet_last_write gauge with current timestamp
+	lastWriteFamily, err := getOrCreateFamily(families, "omet_last_write", dto.MetricType_GAUGE)
+	if err == nil {
+		metric := findOrCreateMetric(lastWriteFamily, map[string]string{})
+		currentTime := float64(time.Now().Unix())
+		metric.Gauge = &dto.Gauge{Value: &currentTime}
+		
+		// Set help text if not already set
+		if lastWriteFamily.Help == nil {
+			lastWriteFamily.Help = stringPtr("Unix timestamp of last OMET write operation")
+		}
+	}
+	
+	// Add omet_modifications_total counter
+	modificationsFamily, err := getOrCreateFamily(families, "omet_modifications_total", dto.MetricType_COUNTER)
+	if err == nil {
+		metric := findOrCreateMetric(modificationsFamily, map[string]string{})
+		
+		// Initialize or increment counter
+		if metric.Counter == nil {
+			metric.Counter = &dto.Counter{Value: float64Ptr(1.0)}
+		} else {
+			currentValue := metric.Counter.GetValue()
+			metric.Counter.Value = float64Ptr(currentValue + 1.0)
+		}
+		
+		// Set help text if not already set
+		if modificationsFamily.Help == nil {
+			modificationsFamily.Help = stringPtr("Total number of OMET modification operations")
+		}
+	}
 }
