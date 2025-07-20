@@ -424,7 +424,12 @@ func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error
 				fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
 			case dto.MetricType_GAUGE:
 				value := metric.GetGauge().GetValue()
-				fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
+				// Use integer format for timestamps (self-monitoring metrics)
+				if strings.HasSuffix(name, "_last_write") {
+					fmt.Fprintf(output, "%s%s %d\n", name, labelStr, int64(value))
+				} else {
+					fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
+				}
 			case dto.MetricType_HISTOGRAM:
 				histogram := metric.GetHistogram()
 
