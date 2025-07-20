@@ -397,3 +397,93 @@ func float64Ptr(f float64) *float64 {
 func int64Ptr(i int64) *int64 {
 	return &i
 }
+
+func TestRealWorldBehavior(t *testing.T) {
+	// Create a test file that matches your actual test.txt
+	testContent := `# HELP omet_modifications_total Counter metric omet_modifications_total
+# TYPE omet_modifications_total counter
+omet_modifications_total 1
+# HELP omet_errors_total Total number of OMET errors by type
+# TYPE omet_errors_total counter
+omet_errors_total{type="invalid_args"} 1
+# HELP omet_last_write Gauge metric omet_last_write
+# TYPE omet_last_write gauge
+omet_last_write 1.752981653e+09
+`
+
+	// Create temp file
+	tmpFile, err := os.CreateTemp("", "healthcheck_test_*.prom")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	
+	_, err = tmpFile.WriteString(testContent)
+	require.NoError(t, err)
+	tmpFile.Close()
+
+	tests := []struct {
+		name           string
+		args           []string
+		expectHealthy  bool
+		expectExitCode int
+	}{
+		{
+			name:           "nonexistent metric should fail",
+			args:           []string{"omet-healthcheck", tmpFile.Name(), "--metric-exists=foobar"},
+			expectHealthy:  false,
+			expectExitCode: 1,
+		},
+		{
+			name:           "very old timestamp should fail",
+			args:           []string{"omet-healthcheck", tmpFile.Name(), "--max-age=1s"},
+			expectHealthy:  false,
+			expectExitCode: 1,
+		},
+		{
+			name:           "zero consecutive errors allowed should pass (no consecutive errors metric)",
+			args:           []string{"omet-healthcheck", tmpFile.Name(), "--max-consecutive-errors=0"},
+			expectHealthy:  true,
+			expectExitCode: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test by calling the main function directly
+			families, err := parseMetricsFile(tmpFile.Name())
+			require.NoError(t, err)
+
+			result := HealthCheckResult{
+				Healthy: true,
+				Checks:  make(map[string]CheckResult),
+			}
+
+			// Manually run the checks based on args
+			if contains(tt.args, "--metric-exists=foobar") {
+				checkMetricExists(families, "foobar", &result, false)
+			}
+			if contains(tt.args, "--max-age=1s") {
+				checkMaxAge(families, 1*time.Second, &result, false)
+			}
+			if contains(tt.args, "--max-consecutive-errors=0") {
+				checkConsecutiveErrors(families, 0, &result, false)
+			}
+
+			assert.Equal(t, tt.expectHealthy, result.Healthy, "Health check result mismatch")
+			
+			// Debug output
+			if result.Healthy != tt.expectHealthy {
+				t.Logf("Expected healthy=%v, got healthy=%v", tt.expectHealthy, result.Healthy)
+				t.Logf("Checks: %+v", result.Checks)
+			}
+		})
+	}
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if strings.Contains(s, item) {
+			return true
+		}
+	}
+	return false
+}
