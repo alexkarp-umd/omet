@@ -82,8 +82,8 @@ type CheckResult struct {
 }
 
 func checkHealth(ctx *cli.Context) error {
-	if ctx.NArg() != 1 {
-		return cli.ShowAppHelp(ctx)
+	if ctx.NArg() == 0 {
+		return fmt.Errorf("missing required argument: metrics_file")
 	}
 
 	filename := ctx.Args().Get(0)
