@@ -566,10 +566,8 @@ func addErrorMetrics(families map[string]*dto.MetricFamily, errorCollector *Erro
 		return // Can't add error metrics if we can't create the family
 	}
 
-	// Set help text if not already set
-	if errorsFamily.Help == nil {
-		errorsFamily.Help = stringPtr("Total number of OMET errors by type")
-	}
+	// Set custom help text (override the generic one)
+	errorsFamily.Help = stringPtr("Total number of OMET errors by type")
 
 	// Count errors by type
 	errorCounts := make(map[string]int)
