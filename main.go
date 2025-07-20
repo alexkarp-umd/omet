@@ -237,7 +237,7 @@ func createMetricFamily(name string, metricType dto.MetricType) *dto.MetricFamil
 	if len(typeStr) > 0 {
 		typeStr = strings.ToUpper(typeStr[:1]) + typeStr[1:]
 	}
-	
+
 	return &dto.MetricFamily{
 		Name: &name,
 		Type: &metricType,
@@ -247,9 +247,9 @@ func createMetricFamily(name string, metricType dto.MetricType) *dto.MetricFamil
 
 func validateMetricType(family *dto.MetricFamily, expectedType dto.MetricType, metricName string) error {
 	if family.GetType() != expectedType {
-		return fmt.Errorf("metric %s is not a %s (type: %s)", 
-			metricName, 
-			strings.ToLower(expectedType.String()), 
+		return fmt.Errorf("metric %s is not a %s (type: %s)",
+			metricName,
+			strings.ToLower(expectedType.String()),
 			family.GetType())
 	}
 	return nil
@@ -285,7 +285,7 @@ func observeHistogram(families map[string]*dto.MetricFamily, name string, labels
 	// Update sample count and sum
 	currentCount := metric.Histogram.GetSampleCount()
 	currentSum := metric.Histogram.GetSampleSum()
-	
+
 	metric.Histogram.SampleCount = uint64Ptr(currentCount + 1)
 	metric.Histogram.SampleSum = float64Ptr(currentSum + value)
 
@@ -302,7 +302,7 @@ func observeHistogram(families map[string]*dto.MetricFamily, name string, labels
 
 func createHistogram(buckets []float64) *dto.Histogram {
 	var histogramBuckets []*dto.Bucket
-	
+
 	// Create buckets with the specified upper bounds
 	for _, bound := range buckets {
 		histogramBuckets = append(histogramBuckets, &dto.Bucket{
@@ -310,7 +310,7 @@ func createHistogram(buckets []float64) *dto.Histogram {
 			CumulativeCount: uint64Ptr(0),
 		})
 	}
-	
+
 	// Add +Inf bucket
 	histogramBuckets = append(histogramBuckets, &dto.Bucket{
 		UpperBound:      float64Ptr(math.Inf(1)),
@@ -409,7 +409,7 @@ func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error
 				fmt.Fprintf(output, "%s%s %g\n", name, labelStr, value)
 			case dto.MetricType_HISTOGRAM:
 				histogram := metric.GetHistogram()
-				
+
 				// Write histogram buckets
 				for _, bucket := range histogram.GetBucket() {
 					bucketLabelStr := labelStr
@@ -420,7 +420,7 @@ func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error
 					}
 					fmt.Fprintf(output, "%s_bucket%s %d\n", name, bucketLabelStr, bucket.GetCumulativeCount())
 				}
-				
+
 				// Write count and sum
 				fmt.Fprintf(output, "%s_count%s %d\n", name, labelStr, histogram.GetSampleCount())
 				fmt.Fprintf(output, "%s_sum%s %g\n", name, labelStr, histogram.GetSampleSum())
@@ -435,7 +435,6 @@ func writeMetrics(families map[string]*dto.MetricFamily, output io.Writer) error
 
 	return nil
 }
-
 
 func stringPtr(s string) *string {
 	return &s
