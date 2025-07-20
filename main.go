@@ -30,6 +30,31 @@ func (r RealTimeProvider) Now() time.Time {
 // Global time provider (can be overridden in tests)
 var timeProvider TimeProvider = RealTimeProvider{}
 
+// ErrorCollector collects errors during operation for metrics
+type ErrorCollector struct {
+	errors []ErrorInfo
+}
+
+type ErrorInfo struct {
+	err       error
+	errorType string
+}
+
+func (ec *ErrorCollector) AddError(err error, errorType string) {
+	ec.errors = append(ec.errors, ErrorInfo{err: err, errorType: errorType})
+}
+
+func (ec *ErrorCollector) HasErrors() bool {
+	return len(ec.errors) > 0
+}
+
+func (ec *ErrorCollector) FirstError() error {
+	if len(ec.errors) == 0 {
+		return nil
+	}
+	return ec.errors[0].err
+}
+
 // Standard histogram buckets for response times (in seconds)
 var defaultHistogramBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
@@ -78,6 +103,8 @@ Examples:
 }
 
 func runOmet(ctx *cli.Context) error {
+	errorCollector := &ErrorCollector{}
+	
 	// Validate arguments
 	if ctx.NArg() < 2 {
 		return cli.ShowAppHelp(ctx)
@@ -89,7 +116,10 @@ func runOmet(ctx *cli.Context) error {
 	// Parse labels
 	labels, err := parseLabels(ctx.StringSlice("label"))
 	if err != nil {
-		return fmt.Errorf("invalid label format: %w", err)
+		errorCollector.AddError(err, "invalid_args")
+		if ctx.Bool("verbose") {
+			log.Printf("Label parsing error: %v", err)
+		}
 	}
 
 	if ctx.Bool("verbose") {
@@ -102,9 +132,11 @@ func runOmet(ctx *cli.Context) error {
 		// Value provided as argument
 		val, err := strconv.ParseFloat(ctx.Args().Get(2), 64)
 		if err != nil {
-			return fmt.Errorf("invalid value '%s': %w", ctx.Args().Get(2), err)
+			errorCollector.AddError(fmt.Errorf("invalid value '%s': %w", ctx.Args().Get(2), err), "invalid_args")
+			value = 0 // Use default value
+		} else {
+			value = val
 		}
-		value = val
 	} else {
 		// Read value from stdin or use default
 		if operation == "inc" {
@@ -112,9 +144,11 @@ func runOmet(ctx *cli.Context) error {
 		} else {
 			val, err := readValueFromStdin()
 			if err != nil {
-				return fmt.Errorf("failed to read value from stdin: %w", err)
+				errorCollector.AddError(fmt.Errorf("failed to read value from stdin: %w", err), "io_error")
+				value = 0 // Use default value
+			} else {
+				value = val
 			}
-			value = val
 		}
 	}
 
@@ -122,7 +156,8 @@ func runOmet(ctx *cli.Context) error {
 		log.Printf("Using value: %g", value)
 	}
 
-	// Read input metrics
+	// Read input metrics (best effort)
+	var families map[string]*dto.MetricFamily
 	var input io.Reader
 	filename := ctx.String("file")
 	if filename == "-" {
@@ -130,32 +165,52 @@ func runOmet(ctx *cli.Context) error {
 	} else {
 		file, err := os.Open(filename)
 		if err != nil {
-			return fmt.Errorf("failed to open file %s: %w", filename, err)
+			errorCollector.AddError(fmt.Errorf("failed to open file %s: %w", filename, err), "io_error")
+			families = make(map[string]*dto.MetricFamily) // Start with empty metrics
+		} else {
+			defer file.Close()
+			input = file
 		}
-		defer file.Close()
-		input = file
 	}
 
-	// Parse existing metrics
-	families, err := parseMetrics(input)
-	if err != nil {
-		return fmt.Errorf("failed to parse metrics: %w", err)
+	// Parse existing metrics (best effort)
+	if input != nil {
+		parsedFamilies, err := parseMetrics(input)
+		if err != nil {
+			errorCollector.AddError(fmt.Errorf("failed to parse metrics: %w", err), "parse_error")
+			families = make(map[string]*dto.MetricFamily) // Start with empty metrics
+		} else {
+			families = parsedFamilies
+		}
+	}
+
+	if families == nil {
+		families = make(map[string]*dto.MetricFamily)
 	}
 
 	if ctx.Bool("verbose") {
 		log.Printf("Parsed %d metric families", len(families))
 	}
 
-	// Apply the operation
-	err = applyOperation(families, metricName, operation, labels, value)
-	if err != nil {
-		return fmt.Errorf("failed to apply operation: %w", err)
+	// Apply the operation (best effort)
+	if !errorCollector.HasErrors() || (labels != nil && value != 0) {
+		err = applyOperation(families, metricName, operation, labels, value)
+		if err != nil {
+			errorCollector.AddError(fmt.Errorf("failed to apply operation: %w", err), "operation_error")
+		}
 	}
 
-	// Write output with self-monitoring
+	// Always try to write metrics (including error metrics)
+	addErrorMetrics(families, errorCollector)
 	err = writeMetricsWithSelfMonitoring(families, os.Stdout)
 	if err != nil {
+		// This is a critical error - we can't write output
 		return fmt.Errorf("failed to write metrics: %w", err)
+	}
+
+	// Return first error for exit code, but after writing metrics
+	if errorCollector.HasErrors() {
+		return errorCollector.FirstError()
 	}
 
 	return nil
@@ -496,6 +551,42 @@ func addSelfMonitoringMetrics(families map[string]*dto.MetricFamily) {
 		// Set help text if not already set
 		if modificationsFamily.Help == nil {
 			modificationsFamily.Help = stringPtr("Total number of OMET modification operations")
+		}
+	}
+}
+
+func addErrorMetrics(families map[string]*dto.MetricFamily, errorCollector *ErrorCollector) {
+	if !errorCollector.HasErrors() {
+		return
+	}
+
+	// Add omet_errors_total counter with error type labels
+	errorsFamily, err := getOrCreateFamily(families, "omet_errors_total", dto.MetricType_COUNTER)
+	if err != nil {
+		return // Can't add error metrics if we can't create the family
+	}
+
+	// Set help text if not already set
+	if errorsFamily.Help == nil {
+		errorsFamily.Help = stringPtr("Total number of OMET errors by type")
+	}
+
+	// Count errors by type
+	errorCounts := make(map[string]int)
+	for _, errorInfo := range errorCollector.errors {
+		errorCounts[errorInfo.errorType]++
+	}
+
+	// Add/increment counter for each error type
+	for errorType, count := range errorCounts {
+		labels := map[string]string{"type": errorType}
+		metric := findOrCreateMetric(errorsFamily, labels)
+
+		if metric.Counter == nil {
+			metric.Counter = &dto.Counter{Value: float64Ptr(float64(count))}
+		} else {
+			currentValue := metric.Counter.GetValue()
+			metric.Counter.Value = float64Ptr(currentValue + float64(count))
 		}
 	}
 }

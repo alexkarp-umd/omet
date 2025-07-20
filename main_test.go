@@ -708,6 +708,166 @@ func TestHistogramDebug(t *testing.T) {
 	})
 }
 
+func TestErrorCollector(t *testing.T) {
+	t.Run("collects and categorizes errors", func(t *testing.T) {
+		collector := &ErrorCollector{}
+		
+		// Add different types of errors
+		collector.AddError(fmt.Errorf("invalid argument"), "invalid_args")
+		collector.AddError(fmt.Errorf("file not found"), "io_error")
+		collector.AddError(fmt.Errorf("parse failed"), "parse_error")
+		collector.AddError(fmt.Errorf("another invalid arg"), "invalid_args")
+		
+		assert.True(t, collector.HasErrors())
+		assert.Len(t, collector.errors, 4)
+		assert.Equal(t, "invalid argument", collector.FirstError().Error())
+	})
+	
+	t.Run("handles no errors", func(t *testing.T) {
+		collector := &ErrorCollector{}
+		
+		assert.False(t, collector.HasErrors())
+		assert.Nil(t, collector.FirstError())
+	})
+}
+
+func TestAddErrorMetrics(t *testing.T) {
+	t.Run("adds error metrics with type labels", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		// Add various error types
+		collector.AddError(fmt.Errorf("bad arg"), "invalid_args")
+		collector.AddError(fmt.Errorf("bad arg 2"), "invalid_args") 
+		collector.AddError(fmt.Errorf("io failed"), "io_error")
+		collector.AddError(fmt.Errorf("parse failed"), "parse_error")
+		
+		addErrorMetrics(families, collector)
+		
+		// Verify error family was created
+		require.Contains(t, families, "omet_errors_total")
+		errorFamily := families["omet_errors_total"]
+		assert.Equal(t, dto.MetricType_COUNTER, errorFamily.GetType())
+		assert.Equal(t, "Total number of OMET errors by type", errorFamily.GetHelp())
+		
+		// Should have 3 metrics (one per error type)
+		assert.Len(t, errorFamily.Metric, 3)
+		
+		// Check error counts by type
+		errorCounts := make(map[string]float64)
+		for _, metric := range errorFamily.Metric {
+			var errorType string
+			for _, label := range metric.Label {
+				if label.GetName() == "type" {
+					errorType = label.GetValue()
+					break
+				}
+			}
+			errorCounts[errorType] = metric.GetCounter().GetValue()
+		}
+		
+		assert.Equal(t, 2.0, errorCounts["invalid_args"], "should have 2 invalid_args errors")
+		assert.Equal(t, 1.0, errorCounts["io_error"], "should have 1 io_error")
+		assert.Equal(t, 1.0, errorCounts["parse_error"], "should have 1 parse_error")
+	})
+	
+	t.Run("increments existing error metrics", func(t *testing.T) {
+		// Start with existing error metrics
+		families := createTestCounterFamily("omet_errors_total", 5.0)
+		errorFamily := families["omet_errors_total"]
+		
+		// Add type label to existing metric
+		errorFamily.Metric[0].Label = []*dto.LabelPair{
+			{Name: stringPtr("type"), Value: stringPtr("invalid_args")},
+		}
+		
+		collector := &ErrorCollector{}
+		collector.AddError(fmt.Errorf("another bad arg"), "invalid_args")
+		collector.AddError(fmt.Errorf("new error type"), "operation_error")
+		
+		addErrorMetrics(families, collector)
+		
+		// Should now have 2 metrics
+		assert.Len(t, errorFamily.Metric, 2)
+		
+		// Find the invalid_args metric and verify it was incremented
+		var invalidArgsCount, operationErrorCount float64
+		for _, metric := range errorFamily.Metric {
+			for _, label := range metric.Label {
+				if label.GetName() == "type" {
+					if label.GetValue() == "invalid_args" {
+						invalidArgsCount = metric.GetCounter().GetValue()
+					} else if label.GetValue() == "operation_error" {
+						operationErrorCount = metric.GetCounter().GetValue()
+					}
+				}
+			}
+		}
+		
+		assert.Equal(t, 6.0, invalidArgsCount, "should increment existing invalid_args counter")
+		assert.Equal(t, 1.0, operationErrorCount, "should create new operation_error counter")
+	})
+	
+	t.Run("does nothing when no errors", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		addErrorMetrics(families, collector)
+		
+		// Should not create error metrics family
+		assert.NotContains(t, families, "omet_errors_total")
+	})
+}
+
+func TestErrorHandlingIntegration(t *testing.T) {
+	t.Run("invalid operation adds error metric but continues", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		// This should fail
+		err := applyOperation(families, "test_metric", "invalid_operation", map[string]string{}, 1.0)
+		assert.Error(t, err)
+		collector.AddError(err, "operation_error")
+		
+		// Add error metrics
+		addErrorMetrics(families, collector)
+		
+		// Verify error metric was added
+		require.Contains(t, families, "omet_errors_total")
+		errorFamily := families["omet_errors_total"]
+		assert.Len(t, errorFamily.Metric, 1)
+		
+		// Check the error type label
+		metric := errorFamily.Metric[0]
+		assert.Len(t, metric.Label, 1)
+		assert.Equal(t, "type", metric.Label[0].GetName())
+		assert.Equal(t, "operation_error", metric.Label[0].GetValue())
+		assert.Equal(t, 1.0, metric.GetCounter().GetValue())
+	})
+	
+	t.Run("type mismatch adds error metric", func(t *testing.T) {
+		// Start with a counter
+		families := createTestCounterFamily("test_counter", 5.0)
+		collector := &ErrorCollector{}
+		
+		// Try to set it as a gauge (should fail)
+		err := setGauge(families, "test_counter", map[string]string{}, 10.0)
+		assert.Error(t, err)
+		collector.AddError(err, "operation_error")
+		
+		// Add error metrics
+		addErrorMetrics(families, collector)
+		
+		// Should have both the original counter and the error metric
+		assert.Contains(t, families, "test_counter")
+		assert.Contains(t, families, "omet_errors_total")
+		
+		// Verify error metric
+		errorFamily := families["omet_errors_total"]
+		assert.Equal(t, 1.0, errorFamily.Metric[0].GetCounter().GetValue())
+	})
+}
+
 func TestSelfMonitoringMetrics(t *testing.T) {
 	t.Run("adds self-monitoring metrics on write", func(t *testing.T) {
 		// Use mock time for deterministic testing
@@ -845,5 +1005,37 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		expectedTimestamp := mockTime.Unix()
 		expectedTimestampFloat := float64(expectedTimestamp)
 		assert.Contains(t, output, fmt.Sprintf("omet_last_write %g", expectedTimestampFloat), "should include mock timestamp in correct format")
+	})
+	
+	t.Run("error metrics appear in output with self-monitoring", func(t *testing.T) {
+		// Use mock time for deterministic testing
+		mockTime := time.Date(2024, 4, 1, 14, 30, 0, 0, time.UTC)
+		setupMockTime(t, mockTime)
+
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		// Add some errors
+		collector.AddError(fmt.Errorf("invalid operation"), "operation_error")
+		collector.AddError(fmt.Errorf("parse failed"), "parse_error")
+		
+		// Add error metrics
+		addErrorMetrics(families, collector)
+
+		var buf bytes.Buffer
+		err := writeMetricsWithSelfMonitoring(families, &buf)
+		require.NoError(t, err)
+
+		output := buf.String()
+
+		// Verify error metrics appear in output
+		assert.Contains(t, output, "# HELP omet_errors_total", "should include help for omet_errors_total")
+		assert.Contains(t, output, "# TYPE omet_errors_total counter", "should include type for omet_errors_total")
+		assert.Contains(t, output, "omet_errors_total{type=\"operation_error\"} 1", "should include operation_error count")
+		assert.Contains(t, output, "omet_errors_total{type=\"parse_error\"} 1", "should include parse_error count")
+		
+		// Verify self-monitoring metrics are still there
+		assert.Contains(t, output, "omet_modifications_total 1", "should include modifications counter")
+		assert.Contains(t, output, "omet_last_write", "should include last write timestamp")
 	})
 }
