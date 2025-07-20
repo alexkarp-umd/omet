@@ -841,8 +841,9 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		assert.Contains(t, output, "# TYPE omet_modifications_total counter", "should include type for omet_modifications_total")
 		assert.Contains(t, output, "omet_modifications_total ", "should include omet_modifications_total value")
 
-		// Verify exact timestamp appears in output
+		// Verify timestamp appears in output (allow scientific notation)
 		expectedTimestamp := mockTime.Unix()
-		assert.Contains(t, output, fmt.Sprintf("omet_last_write %d", expectedTimestamp), "should include exact mock timestamp")
+		expectedTimestampFloat := float64(expectedTimestamp)
+		assert.Contains(t, output, fmt.Sprintf("omet_last_write %g", expectedTimestampFloat), "should include mock timestamp in correct format")
 	})
 }
