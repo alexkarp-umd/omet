@@ -713,7 +713,7 @@ func TestAddOperationalMetrics(t *testing.T) {
 		families := make(map[string]*dto.MetricFamily)
 		collector := &ErrorCollector{}
 		
-		addOperationalMetrics(families, "inc", 1024, time.Second, collector)
+		addOperationalMetrics(families, "inc", 1024, collector)
 		
 		// Verify operations counter was created
 		require.Contains(t, families, "omet_operations_by_type_total")
@@ -741,7 +741,7 @@ func TestAddOperationalMetrics(t *testing.T) {
 		}
 		
 		collector := &ErrorCollector{}
-		addOperationalMetrics(families, "set", 2048, time.Minute, collector)
+		addOperationalMetrics(families, "set", 2048, collector)
 		
 		// Should increment existing counter
 		assert.Equal(t, 6.0, opsFamily.Metric[0].GetCounter().GetValue())
@@ -751,7 +751,7 @@ func TestAddOperationalMetrics(t *testing.T) {
 		families := make(map[string]*dto.MetricFamily)
 		collector := &ErrorCollector{}
 		
-		addOperationalMetrics(families, "observe", 4096, time.Millisecond*500, collector)
+		addOperationalMetrics(families, "observe", 4096, collector)
 		
 		// Verify input bytes counter was created
 		require.Contains(t, families, "omet_input_bytes_total")
@@ -765,33 +765,10 @@ func TestAddOperationalMetrics(t *testing.T) {
 		families := make(map[string]*dto.MetricFamily)
 		collector := &ErrorCollector{}
 		
-		addOperationalMetrics(families, "inc", 0, time.Second, collector)
+		addOperationalMetrics(families, "inc", 0, collector)
 		
 		// Should not create input bytes counter
 		assert.NotContains(t, families, "omet_input_bytes_total")
-	})
-	
-	t.Run("adds process duration histogram", func(t *testing.T) {
-		families := make(map[string]*dto.MetricFamily)
-		collector := &ErrorCollector{}
-		duration := time.Millisecond * 1500 // 1.5 seconds
-		
-		addOperationalMetrics(families, "set", 1024, duration, collector)
-		
-		// Verify duration histogram was created
-		require.Contains(t, families, "omet_process_duration_seconds")
-		durationFamily := families["omet_process_duration_seconds"]
-		assert.Equal(t, dto.MetricType_HISTOGRAM, durationFamily.GetType())
-		assert.Equal(t, "Duration of OMET operations in seconds", durationFamily.GetHelp())
-		
-		// Should have one metric with histogram data
-		assert.Len(t, durationFamily.Metric, 1)
-		metric := durationFamily.Metric[0]
-		require.NotNil(t, metric.Histogram)
-		
-		// Should have recorded the 1.5 second observation
-		assert.Equal(t, uint64(1), metric.Histogram.GetSampleCount())
-		assert.Equal(t, 1.5, metric.Histogram.GetSampleSum())
 	})
 	
 	t.Run("adds consecutive errors gauge for failed run", func(t *testing.T) {
@@ -802,7 +779,7 @@ func TestAddOperationalMetrics(t *testing.T) {
 		collector.AddError(fmt.Errorf("error 1"), "type1")
 		collector.AddError(fmt.Errorf("error 2"), "type2")
 		
-		addOperationalMetrics(families, "inc", 512, time.Second, collector)
+		addOperationalMetrics(families, "inc", 512, collector)
 		
 		// Verify consecutive errors gauge was created
 		require.Contains(t, families, "omet_consecutive_errors_total")
@@ -820,7 +797,7 @@ func TestAddOperationalMetrics(t *testing.T) {
 		// This run also failed
 		collector.AddError(fmt.Errorf("error 1"), "type1")
 		
-		addOperationalMetrics(families, "inc", 256, time.Second, collector)
+		addOperationalMetrics(families, "inc", 256, collector)
 		
 		// Should increment to 3 (2 + 1)
 		errorsFamily := families["omet_consecutive_errors_total"]
@@ -834,7 +811,7 @@ func TestAddOperationalMetrics(t *testing.T) {
 		
 		// This run was successful (no errors)
 		
-		addOperationalMetrics(families, "inc", 256, time.Second, collector)
+		addOperationalMetrics(families, "inc", 256, collector)
 		
 		// Should reset to 0
 		errorsFamily := families["omet_consecutive_errors_total"]
@@ -856,8 +833,7 @@ func TestOperationalMetricsIntegration(t *testing.T) {
 		require.NoError(t, err)
 		
 		// Add operational metrics
-		duration := time.Millisecond * 750 // 0.75 seconds
-		addOperationalMetrics(families, "inc", 2048, duration, collector)
+		addOperationalMetrics(families, "inc", 2048, collector)
 
 		var buf bytes.Buffer
 		err = writeMetricsWithSelfMonitoring(families, &buf)
@@ -872,11 +848,6 @@ func TestOperationalMetricsIntegration(t *testing.T) {
 		
 		assert.Contains(t, output, "# HELP omet_input_bytes_total", "should include input bytes help")
 		assert.Contains(t, output, "omet_input_bytes_total 2048", "should include input bytes count")
-		
-		assert.Contains(t, output, "# HELP omet_process_duration_seconds", "should include duration help")
-		assert.Contains(t, output, "omet_process_duration_seconds_count 1", "should include duration count")
-		assert.Contains(t, output, "omet_process_duration_seconds_sum 0.75", "should include duration sum")
-		assert.Contains(t, output, "omet_process_duration_seconds_bucket", "should include duration buckets")
 		
 		assert.Contains(t, output, "# HELP omet_consecutive_errors_total", "should include consecutive errors help")
 		assert.Contains(t, output, "omet_consecutive_errors_total 0", "should show zero consecutive errors")
@@ -898,7 +869,7 @@ func TestOperationalMetricsIntegration(t *testing.T) {
 		collector.AddError(fmt.Errorf("io error"), "io_error")
 		collector.AddError(fmt.Errorf("operation error"), "operation_error")
 		
-		addOperationalMetrics(families, "set", 1024, time.Second, collector)
+		addOperationalMetrics(families, "set", 1024, collector)
 		addErrorMetrics(families, collector)
 
 		var buf bytes.Buffer
