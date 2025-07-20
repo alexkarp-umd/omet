@@ -326,24 +326,24 @@ func TestObserveHistogram(t *testing.T) {
 				family, exists := families["response_time_seconds"]
 				require.True(t, exists, "histogram family should be created")
 				assert.Equal(t, dto.MetricType_HISTOGRAM, family.GetType())
-				
+
 				// Should have one metric
 				require.Len(t, family.Metric, 1)
 				metric := family.Metric[0]
-				
+
 				// Should have histogram data
 				require.NotNil(t, metric.Histogram, "metric should have histogram data")
-				
+
 				// Should have count = 1 (one observation)
 				assert.Equal(t, uint64(1), metric.Histogram.GetSampleCount())
-				
+
 				// Should have sum = 0.123 (the observed value)
 				assert.Equal(t, 0.123, metric.Histogram.GetSampleSum())
-				
+
 				// Should have buckets (at least the +Inf bucket)
 				buckets := metric.Histogram.GetBucket()
 				require.NotEmpty(t, buckets, "should have at least one bucket")
-				
+
 				// The +Inf bucket should have count = 1
 				infBucket := buckets[len(buckets)-1]
 				assert.True(t, infBucket.GetUpperBound() > 1e10, "last bucket should be +Inf")
@@ -359,10 +359,10 @@ func TestObserveHistogram(t *testing.T) {
 			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
 				family := families["response_time_seconds"]
 				metric := family.Metric[0]
-				
+
 				// Should have count = 2 (original 1 + new 1)
 				assert.Equal(t, uint64(2), metric.Histogram.GetSampleCount())
-				
+
 				// Should have sum = 0.3 (original 0.1 + new 0.2)
 				assert.InDelta(t, 0.3, metric.Histogram.GetSampleSum(), 1e-10)
 			},
@@ -376,10 +376,10 @@ func TestObserveHistogram(t *testing.T) {
 			validate: func(t *testing.T, families map[string]*dto.MetricFamily) {
 				family := families["request_duration"]
 				metric := family.Metric[0]
-				
+
 				// Should have the correct labels
 				assert.Len(t, metric.Label, 2)
-				
+
 				// Should have histogram data
 				assert.Equal(t, uint64(1), metric.Histogram.GetSampleCount())
 				assert.Equal(t, 0.05, metric.Histogram.GetSampleSum())
@@ -406,7 +406,7 @@ func TestObserveHistogram(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := observeHistogram(tt.families, tt.metricName, tt.labels, tt.value)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -569,7 +569,7 @@ func createTestGaugeFamily(name string, value float64) map[string]*dto.MetricFam
 func createTestHistogramFamily(name string, bucketBounds []float64, bucketCounts []uint64, sampleCount uint64, sampleSum float64) map[string]*dto.MetricFamily {
 	families := make(map[string]*dto.MetricFamily)
 	metricType := dto.MetricType_HISTOGRAM
-	
+
 	// Create buckets
 	var buckets []*dto.Bucket
 	for i, bound := range bucketBounds {
@@ -578,14 +578,14 @@ func createTestHistogramFamily(name string, bucketBounds []float64, bucketCounts
 			CumulativeCount: &bucketCounts[i],
 		})
 	}
-	
+
 	// Add +Inf bucket
 	infBound := float64(1e10) // Represents +Inf
 	buckets = append(buckets, &dto.Bucket{
 		UpperBound:      &infBound,
 		CumulativeCount: &sampleCount,
 	})
-	
+
 	families[name] = &dto.MetricFamily{
 		Name: &name,
 		Type: &metricType,
@@ -613,20 +613,20 @@ func TestMetricRoundTrip(t *testing.T) {
 		{"gauge", "set", 42.5},
 		{"histogram", "observe", 0.123},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			families := make(map[string]*dto.MetricFamily)
-			
+
 			// Apply operation
 			err := applyOperation(families, "test_metric", tt.operation, map[string]string{}, tt.value)
 			require.NoError(t, err)
-			
+
 			// Verify we can write it (this would have caught the bug!)
 			var buf bytes.Buffer
 			err = writeMetrics(families, &buf)
 			require.NoError(t, err)
-			
+
 			// Basic sanity check
 			output := buf.String()
 			assert.Contains(t, output, "test_metric")
@@ -638,71 +638,71 @@ func TestMetricRoundTrip(t *testing.T) {
 func TestHistogramDebug(t *testing.T) {
 	t.Run("single observation debug", func(t *testing.T) {
 		families := make(map[string]*dto.MetricFamily)
-		
+
 		// Add one observation
 		err := observeHistogram(families, "response_time", map[string]string{"service": "web-api"}, 0.25)
 		require.NoError(t, err)
-		
+
 		// Debug: Print the internal structure
 		family := families["response_time"]
 		metric := family.Metric[0]
 		histogram := metric.Histogram
-		
+
 		t.Logf("Sample Count: %d", histogram.GetSampleCount())
 		t.Logf("Sample Sum: %g", histogram.GetSampleSum())
 		t.Logf("Number of buckets: %d", len(histogram.Bucket))
-		
+
 		for i, bucket := range histogram.Bucket {
 			t.Logf("Bucket %d: le=%g, count=%d", i, bucket.GetUpperBound(), bucket.GetCumulativeCount())
 		}
-		
+
 		// Test serialization
 		var buf bytes.Buffer
-		err = writeMetricsWithSelfMonitoring(families, &buf)
+		err = writeMetrics(families, &buf)
 		require.NoError(t, err)
-		
+
 		output := buf.String()
 		t.Logf("Serialized output:\n%s", output)
-		
+
 		// Verify we get the expected output
 		assert.Contains(t, output, "response_time_count")
 		assert.Contains(t, output, "response_time_sum")
 		assert.Contains(t, output, "response_time_bucket")
 	})
-	
+
 	t.Run("multiple observations debug", func(t *testing.T) {
 		families := make(map[string]*dto.MetricFamily)
-		
+
 		// Add multiple observations
 		values := []float64{0.25, 100, 1000}
 		for _, val := range values {
 			err := observeHistogram(families, "response_time", map[string]string{"service": "web-api"}, val)
 			require.NoError(t, err)
 		}
-		
+
 		// Debug internal state
 		family := families["response_time"]
 		metric := family.Metric[0]
 		histogram := metric.Histogram
-		
+
 		t.Logf("After %d observations:", len(values))
 		t.Logf("Sample Count: %d", histogram.GetSampleCount())
 		t.Logf("Sample Sum: %g", histogram.GetSampleSum())
-		
+
 		expectedSum := 0.25 + 100 + 1000 // = 1100.25
 		assert.Equal(t, uint64(3), histogram.GetSampleCount())
 		assert.InDelta(t, expectedSum, histogram.GetSampleSum(), 1e-10)
-		
+
 		// Check bucket distribution
 		for i, bucket := range histogram.Bucket {
 			t.Logf("Bucket %d: le=%g, count=%d", i, bucket.GetUpperBound(), bucket.GetCumulativeCount())
 		}
-		
+
 		// Test serialization
 		var buf bytes.Buffer
 		err := writeMetrics(families, &buf)
 		require.NoError(t, err)
-		
+
 		output := buf.String()
 		t.Logf("Serialized output:\n%s", output)
 	})
@@ -713,134 +713,134 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		// Use mock time for deterministic testing
 		mockTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 		setupMockTime(t, mockTime)
-		
+
 		families := make(map[string]*dto.MetricFamily)
-		
+
 		// Add a regular metric
 		err := incrementCounter(families, "test_counter", map[string]string{"env": "test"}, 1.0)
 		require.NoError(t, err)
-		
+
 		// Write metrics (this should add self-monitoring metrics)
 		var buf bytes.Buffer
 		err = writeMetricsWithSelfMonitoring(families, &buf)
 		require.NoError(t, err)
-		
+
 		// Verify self-monitoring metrics were added
 		assert.Contains(t, families, "omet_last_write", "should add omet_last_write metric")
 		assert.Contains(t, families, "omet_modifications_total", "should add omet_modifications_total metric")
-		
+
 		// Verify omet_last_write is a gauge with expected timestamp
 		lastWriteFamily := families["omet_last_write"]
 		assert.Equal(t, dto.MetricType_GAUGE, lastWriteFamily.GetType())
 		assert.Len(t, lastWriteFamily.Metric, 1)
-		
+
 		timestamp := int64(lastWriteFamily.Metric[0].GetGauge().GetValue())
 		expectedTimestamp := mockTime.Unix()
 		assert.Equal(t, expectedTimestamp, timestamp, "timestamp should match mock time")
-		
+
 		// Verify omet_modifications_total is a counter starting at 1
 		modificationsFamily := families["omet_modifications_total"]
 		assert.Equal(t, dto.MetricType_COUNTER, modificationsFamily.GetType())
 		assert.Len(t, modificationsFamily.Metric, 1)
-		
+
 		count := modificationsFamily.Metric[0].GetCounter().GetValue()
 		assert.Equal(t, 1.0, count, "should start at 1 for first modification")
 	})
-	
+
 	t.Run("increments modification counter on subsequent writes", func(t *testing.T) {
 		// Use mock time for deterministic testing
 		mockTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 		mockProvider := setupMockTime(t, mockTime)
-		
+
 		families := make(map[string]*dto.MetricFamily)
-		
+
 		// First write
 		err := incrementCounter(families, "test_counter", map[string]string{}, 1.0)
 		require.NoError(t, err)
-		
+
 		var buf1 bytes.Buffer
 		err = writeMetricsWithSelfMonitoring(families, &buf1)
 		require.NoError(t, err)
-		
+
 		// Advance time and do second write
 		mockProvider.SetTime(mockTime.Add(5 * time.Minute))
-		
+
 		err = incrementCounter(families, "test_counter", map[string]string{}, 1.0)
 		require.NoError(t, err)
-		
+
 		var buf2 bytes.Buffer
 		err = writeMetricsWithSelfMonitoring(families, &buf2)
 		require.NoError(t, err)
-		
+
 		// Verify counter incremented
 		modificationsFamily := families["omet_modifications_total"]
 		count := modificationsFamily.Metric[0].GetCounter().GetValue()
 		assert.Equal(t, 2.0, count, "should increment to 2 after second write")
-		
+
 		// Verify timestamp updated to new time
 		lastWriteFamily := families["omet_last_write"]
 		timestamp := int64(lastWriteFamily.Metric[0].GetGauge().GetValue())
 		expectedTimestamp := mockTime.Add(5 * time.Minute).Unix()
 		assert.Equal(t, expectedTimestamp, timestamp, "timestamp should be updated to new mock time")
 	})
-	
+
 	t.Run("preserves existing self-monitoring metrics", func(t *testing.T) {
 		// Use mock time for deterministic testing
 		mockTime := time.Date(2024, 2, 1, 15, 30, 0, 0, time.UTC)
 		setupMockTime(t, mockTime)
-		
+
 		// Start with existing self-monitoring metrics (simulating file read)
 		families := createTestCounterFamily("omet_modifications_total", 42.0)
 		gaugeFamily := createTestGaugeFamily("omet_last_write", 1234567890.0)
 		families["omet_last_write"] = gaugeFamily["omet_last_write"]
-		
+
 		// Add a regular metric
 		err := setGauge(families, "test_gauge", map[string]string{}, 100.0)
 		require.NoError(t, err)
-		
+
 		// Write metrics
 		var buf bytes.Buffer
 		err = writeMetricsWithSelfMonitoring(families, &buf)
 		require.NoError(t, err)
-		
+
 		// Verify existing counter was incremented (not reset)
 		modificationsFamily := families["omet_modifications_total"]
 		count := modificationsFamily.Metric[0].GetCounter().GetValue()
 		assert.Equal(t, 43.0, count, "should increment existing counter")
-		
+
 		// Verify timestamp was updated to mock time
 		lastWriteFamily := families["omet_last_write"]
 		timestamp := int64(lastWriteFamily.Metric[0].GetGauge().GetValue())
 		expectedTimestamp := mockTime.Unix()
 		assert.Equal(t, expectedTimestamp, timestamp, "should update to mock time")
 	})
-	
+
 	t.Run("self-monitoring metrics appear in output", func(t *testing.T) {
 		// Use mock time for deterministic testing
 		mockTime := time.Date(2024, 3, 1, 9, 15, 30, 0, time.UTC)
 		setupMockTime(t, mockTime)
-		
+
 		families := make(map[string]*dto.MetricFamily)
-		
+
 		// Add a metric and write
 		err := observeHistogram(families, "response_time", map[string]string{"service": "api"}, 0.123)
 		require.NoError(t, err)
-		
+
 		var buf bytes.Buffer
 		err = writeMetrics(families, &buf)
 		require.NoError(t, err)
-		
+
 		output := buf.String()
-		
+
 		// Verify self-monitoring metrics appear in output
 		assert.Contains(t, output, "# HELP omet_last_write", "should include help for omet_last_write")
 		assert.Contains(t, output, "# TYPE omet_last_write gauge", "should include type for omet_last_write")
 		assert.Contains(t, output, "omet_last_write ", "should include omet_last_write value")
-		
+
 		assert.Contains(t, output, "# HELP omet_modifications_total", "should include help for omet_modifications_total")
 		assert.Contains(t, output, "# TYPE omet_modifications_total counter", "should include type for omet_modifications_total")
 		assert.Contains(t, output, "omet_modifications_total ", "should include omet_modifications_total value")
-		
+
 		// Verify exact timestamp appears in output
 		expectedTimestamp := mockTime.Unix()
 		assert.Contains(t, output, fmt.Sprintf("omet_last_write %d", expectedTimestamp), "should include exact mock timestamp")
