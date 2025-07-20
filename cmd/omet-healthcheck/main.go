@@ -42,22 +42,19 @@ Exit codes:
 			&cli.DurationFlag{
 				Name:  "max-age",
 				Usage: "Maximum age since last write (e.g. 300s, 5m)",
-				Value: 0, // Explicit default
 			},
 			&cli.IntFlag{
 				Name:  "max-consecutive-errors",
 				Usage: "Maximum allowed consecutive errors",
-				Value: -1, // -1 means don't check
+				Value: -1,
 			},
 			&cli.StringFlag{
 				Name:  "metric-exists",
 				Usage: "Check that specified metric exists",
-				Value: "", // Explicit default
 			},
 			&cli.BoolFlag{
 				Name:  "verbose",
 				Usage: "Enable verbose output",
-				Value: false, // Explicit default
 			},
 		},
 
