@@ -708,6 +708,192 @@ func TestHistogramDebug(t *testing.T) {
 	})
 }
 
+func TestAddOperationalMetrics(t *testing.T) {
+	t.Run("adds operation type counter", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		addOperationalMetrics(families, "inc", 1024, time.Second, collector)
+		
+		// Verify operations counter was created
+		require.Contains(t, families, "omet_operations_by_type_total")
+		opsFamily := families["omet_operations_by_type_total"]
+		assert.Equal(t, dto.MetricType_COUNTER, opsFamily.GetType())
+		assert.Equal(t, "Total number of OMET operations by type", opsFamily.GetHelp())
+		
+		// Should have one metric with operation=inc label
+		assert.Len(t, opsFamily.Metric, 1)
+		metric := opsFamily.Metric[0]
+		assert.Len(t, metric.Label, 1)
+		assert.Equal(t, "operation", metric.Label[0].GetName())
+		assert.Equal(t, "inc", metric.Label[0].GetValue())
+		assert.Equal(t, 1.0, metric.GetCounter().GetValue())
+	})
+	
+	t.Run("increments existing operation counter", func(t *testing.T) {
+		// Start with existing operations counter
+		families := createTestCounterFamily("omet_operations_by_type_total", 5.0)
+		opsFamily := families["omet_operations_by_type_total"]
+		
+		// Add operation label to existing metric
+		opsFamily.Metric[0].Label = []*dto.LabelPair{
+			{Name: stringPtr("operation"), Value: stringPtr("set")},
+		}
+		
+		collector := &ErrorCollector{}
+		addOperationalMetrics(families, "set", 2048, time.Minute, collector)
+		
+		// Should increment existing counter
+		assert.Equal(t, 6.0, opsFamily.Metric[0].GetCounter().GetValue())
+	})
+	
+	t.Run("adds input bytes counter when size > 0", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		addOperationalMetrics(families, "observe", 4096, time.Millisecond*500, collector)
+		
+		// Verify input bytes counter was created
+		require.Contains(t, families, "omet_input_bytes_total")
+		inputFamily := families["omet_input_bytes_total"]
+		assert.Equal(t, dto.MetricType_COUNTER, inputFamily.GetType())
+		assert.Equal(t, "Total bytes read from input files", inputFamily.GetHelp())
+		assert.Equal(t, 4096.0, inputFamily.Metric[0].GetCounter().GetValue())
+	})
+	
+	t.Run("skips input bytes counter when size is 0", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		addOperationalMetrics(families, "inc", 0, time.Second, collector)
+		
+		// Should not create input bytes counter
+		assert.NotContains(t, families, "omet_input_bytes_total")
+	})
+	
+	t.Run("adds process duration gauge", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		duration := time.Millisecond * 1500 // 1.5 seconds
+		
+		addOperationalMetrics(families, "set", 1024, duration, collector)
+		
+		// Verify duration gauge was created
+		require.Contains(t, families, "omet_process_duration_seconds")
+		durationFamily := families["omet_process_duration_seconds"]
+		assert.Equal(t, dto.MetricType_GAUGE, durationFamily.GetType())
+		assert.Equal(t, "Duration of the last OMET operation in seconds", durationFamily.GetHelp())
+		assert.Equal(t, 1.5, durationFamily.Metric[0].GetGauge().GetValue())
+	})
+	
+	t.Run("adds consecutive errors gauge", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		// Add some consecutive errors
+		collector.AddError(fmt.Errorf("error 1"), "type1")
+		collector.AddError(fmt.Errorf("error 2"), "type2")
+		collector.AddError(fmt.Errorf("error 3"), "type1")
+		
+		addOperationalMetrics(families, "inc", 512, time.Second, collector)
+		
+		// Verify consecutive errors gauge was created
+		require.Contains(t, families, "omet_consecutive_errors_total")
+		errorsFamily := families["omet_consecutive_errors_total"]
+		assert.Equal(t, dto.MetricType_GAUGE, errorsFamily.GetType())
+		assert.Equal(t, "Number of consecutive errors (resets on success)", errorsFamily.GetHelp())
+		assert.Equal(t, 3.0, errorsFamily.Metric[0].GetGauge().GetValue())
+	})
+	
+	t.Run("shows zero consecutive errors after reset", func(t *testing.T) {
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		// Add errors then reset
+		collector.AddError(fmt.Errorf("error 1"), "type1")
+		collector.AddError(fmt.Errorf("error 2"), "type2")
+		collector.ResetConsecutiveErrors()
+		
+		addOperationalMetrics(families, "inc", 256, time.Second, collector)
+		
+		// Should show 0 consecutive errors
+		errorsFamily := families["omet_consecutive_errors_total"]
+		assert.Equal(t, 0.0, errorsFamily.Metric[0].GetGauge().GetValue())
+	})
+}
+
+func TestOperationalMetricsIntegration(t *testing.T) {
+	t.Run("operational metrics appear in output", func(t *testing.T) {
+		// Use mock time for deterministic testing
+		mockTime := time.Date(2024, 5, 1, 10, 30, 0, 0, time.UTC)
+		setupMockTime(t, mockTime)
+
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		// Add a regular metric operation
+		err := incrementCounter(families, "test_counter", map[string]string{"env": "test"}, 5.0)
+		require.NoError(t, err)
+		
+		// Add operational metrics
+		duration := time.Millisecond * 750 // 0.75 seconds
+		addOperationalMetrics(families, "inc", 2048, duration, collector)
+
+		var buf bytes.Buffer
+		err = writeMetricsWithSelfMonitoring(families, &buf)
+		require.NoError(t, err)
+
+		output := buf.String()
+
+		// Verify operational metrics appear in output
+		assert.Contains(t, output, "# HELP omet_operations_by_type_total", "should include operations counter help")
+		assert.Contains(t, output, "# TYPE omet_operations_by_type_total counter", "should include operations counter type")
+		assert.Contains(t, output, `omet_operations_by_type_total{operation="inc"} 1`, "should include operation count")
+		
+		assert.Contains(t, output, "# HELP omet_input_bytes_total", "should include input bytes help")
+		assert.Contains(t, output, "omet_input_bytes_total 2048", "should include input bytes count")
+		
+		assert.Contains(t, output, "# HELP omet_process_duration_seconds", "should include duration help")
+		assert.Contains(t, output, "omet_process_duration_seconds 0.75", "should include duration value")
+		
+		assert.Contains(t, output, "# HELP omet_consecutive_errors_total", "should include consecutive errors help")
+		assert.Contains(t, output, "omet_consecutive_errors_total 0", "should show zero consecutive errors")
+		
+		// Verify self-monitoring metrics are still there
+		assert.Contains(t, output, "omet_modifications_total", "should include modifications counter")
+		assert.Contains(t, output, "omet_last_write", "should include last write timestamp")
+	})
+	
+	t.Run("consecutive errors tracked across operations", func(t *testing.T) {
+		mockTime := time.Date(2024, 6, 1, 15, 0, 0, 0, time.UTC)
+		setupMockTime(t, mockTime)
+
+		families := make(map[string]*dto.MetricFamily)
+		collector := &ErrorCollector{}
+		
+		// Simulate multiple errors
+		collector.AddError(fmt.Errorf("parse error"), "parse_error")
+		collector.AddError(fmt.Errorf("io error"), "io_error")
+		collector.AddError(fmt.Errorf("operation error"), "operation_error")
+		
+		addOperationalMetrics(families, "set", 1024, time.Second, collector)
+
+		var buf bytes.Buffer
+		err := writeMetricsWithSelfMonitoring(families, &buf)
+		require.NoError(t, err)
+
+		output := buf.String()
+
+		// Should show 3 consecutive errors
+		assert.Contains(t, output, "omet_consecutive_errors_total 3", "should track consecutive errors")
+		
+		// Should also have error breakdown by type
+		assert.Contains(t, output, `omet_errors_total{type="parse_error"} 1`, "should count parse errors")
+		assert.Contains(t, output, `omet_errors_total{type="io_error"} 1`, "should count io errors")
+		assert.Contains(t, output, `omet_errors_total{type="operation_error"} 1`, "should count operation errors")
+	})
+}
+
 func TestErrorCollector(t *testing.T) {
 	t.Run("collects and categorizes errors", func(t *testing.T) {
 		collector := &ErrorCollector{}
@@ -721,6 +907,7 @@ func TestErrorCollector(t *testing.T) {
 		assert.True(t, collector.HasErrors())
 		assert.Len(t, collector.errors, 4)
 		assert.Equal(t, "invalid argument", collector.FirstError().Error())
+		assert.Equal(t, 4, collector.GetConsecutiveErrors())
 	})
 	
 	t.Run("handles no errors", func(t *testing.T) {
@@ -728,6 +915,24 @@ func TestErrorCollector(t *testing.T) {
 		
 		assert.False(t, collector.HasErrors())
 		assert.Nil(t, collector.FirstError())
+		assert.Equal(t, 0, collector.GetConsecutiveErrors())
+	})
+	
+	t.Run("tracks consecutive errors and resets", func(t *testing.T) {
+		collector := &ErrorCollector{}
+		
+		// Add some errors
+		collector.AddError(fmt.Errorf("error 1"), "type1")
+		collector.AddError(fmt.Errorf("error 2"), "type2")
+		assert.Equal(t, 2, collector.GetConsecutiveErrors())
+		
+		// Reset consecutive errors
+		collector.ResetConsecutiveErrors()
+		assert.Equal(t, 0, collector.GetConsecutiveErrors())
+		
+		// Add more errors
+		collector.AddError(fmt.Errorf("error 3"), "type1")
+		assert.Equal(t, 1, collector.GetConsecutiveErrors())
 	})
 }
 

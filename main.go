@@ -32,7 +32,8 @@ var timeProvider TimeProvider = RealTimeProvider{}
 
 // ErrorCollector collects errors during operation for metrics
 type ErrorCollector struct {
-	errors []ErrorInfo
+	errors            []ErrorInfo
+	consecutiveErrors int
 }
 
 type ErrorInfo struct {
@@ -42,6 +43,15 @@ type ErrorInfo struct {
 
 func (ec *ErrorCollector) AddError(err error, errorType string) {
 	ec.errors = append(ec.errors, ErrorInfo{err: err, errorType: errorType})
+	ec.consecutiveErrors++
+}
+
+func (ec *ErrorCollector) ResetConsecutiveErrors() {
+	ec.consecutiveErrors = 0
+}
+
+func (ec *ErrorCollector) GetConsecutiveErrors() int {
+	return ec.consecutiveErrors
 }
 
 func (ec *ErrorCollector) HasErrors() bool {
@@ -103,6 +113,7 @@ Examples:
 }
 
 func runOmet(ctx *cli.Context) error {
+	startTime := timeProvider.Now()
 	errorCollector := &ErrorCollector{}
 	
 	// Validate arguments
@@ -159,6 +170,7 @@ func runOmet(ctx *cli.Context) error {
 	// Read input metrics (best effort)
 	var families map[string]*dto.MetricFamily
 	var input io.Reader
+	var inputSize int64
 	filename := ctx.String("file")
 	if filename == "-" {
 		input = os.Stdin
@@ -169,6 +181,10 @@ func runOmet(ctx *cli.Context) error {
 			families = make(map[string]*dto.MetricFamily) // Start with empty metrics
 		} else {
 			defer file.Close()
+			// Get file size for metrics
+			if stat, err := file.Stat(); err == nil {
+				inputSize = stat.Size()
+			}
 			input = file
 		}
 	}
@@ -193,15 +209,27 @@ func runOmet(ctx *cli.Context) error {
 	}
 
 	// Apply the operation (best effort)
+	operationSuccessful := false
 	if !errorCollector.HasErrors() || (labels != nil && value != 0) {
 		err = applyOperation(families, metricName, operation, labels, value)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to apply operation: %w", err), "operation_error")
+		} else {
+			operationSuccessful = true
 		}
 	}
 
+	// Reset consecutive errors on successful operation
+	if operationSuccessful {
+		errorCollector.ResetConsecutiveErrors()
+	}
+
+	// Calculate processing duration
+	processingDuration := timeProvider.Now().Sub(startTime)
+
 	// Always try to write metrics (including error metrics)
 	addErrorMetrics(families, errorCollector)
+	addOperationalMetrics(families, operation, inputSize, processingDuration, errorCollector)
 	err = writeMetricsWithSelfMonitoring(families, os.Stdout)
 	if err != nil {
 		// This is a critical error - we can't write output
@@ -586,5 +614,56 @@ func addErrorMetrics(families map[string]*dto.MetricFamily, errorCollector *Erro
 			currentValue := metric.Counter.GetValue()
 			metric.Counter.Value = float64Ptr(currentValue + float64(count))
 		}
+	}
+}
+
+func addOperationalMetrics(families map[string]*dto.MetricFamily, operation string, inputSize int64, processingDuration time.Duration, errorCollector *ErrorCollector) {
+	// Add omet_operations_by_type_total counter
+	opsFamily, err := getOrCreateFamily(families, "omet_operations_by_type_total", dto.MetricType_COUNTER)
+	if err == nil {
+		opsFamily.Help = stringPtr("Total number of OMET operations by type")
+		labels := map[string]string{"operation": operation}
+		metric := findOrCreateMetric(opsFamily, labels)
+
+		if metric.Counter == nil {
+			metric.Counter = &dto.Counter{Value: float64Ptr(1.0)}
+		} else {
+			currentValue := metric.Counter.GetValue()
+			metric.Counter.Value = float64Ptr(currentValue + 1.0)
+		}
+	}
+
+	// Add omet_input_bytes_total counter (only if we have input size)
+	if inputSize > 0 {
+		inputFamily, err := getOrCreateFamily(families, "omet_input_bytes_total", dto.MetricType_COUNTER)
+		if err == nil {
+			inputFamily.Help = stringPtr("Total bytes read from input files")
+			metric := findOrCreateMetric(inputFamily, map[string]string{})
+
+			if metric.Counter == nil {
+				metric.Counter = &dto.Counter{Value: float64Ptr(float64(inputSize))}
+			} else {
+				currentValue := metric.Counter.GetValue()
+				metric.Counter.Value = float64Ptr(currentValue + float64(inputSize))
+			}
+		}
+	}
+
+	// Add omet_process_duration_seconds gauge
+	durationFamily, err := getOrCreateFamily(families, "omet_process_duration_seconds", dto.MetricType_GAUGE)
+	if err == nil {
+		durationFamily.Help = stringPtr("Duration of the last OMET operation in seconds")
+		metric := findOrCreateMetric(durationFamily, map[string]string{})
+		durationSeconds := processingDuration.Seconds()
+		metric.Gauge = &dto.Gauge{Value: &durationSeconds}
+	}
+
+	// Add omet_consecutive_errors_total gauge
+	consecutiveErrorsFamily, err := getOrCreateFamily(families, "omet_consecutive_errors_total", dto.MetricType_GAUGE)
+	if err == nil {
+		consecutiveErrorsFamily.Help = stringPtr("Number of consecutive errors (resets on success)")
+		metric := findOrCreateMetric(consecutiveErrorsFamily, map[string]string{})
+		consecutiveErrors := float64(errorCollector.GetConsecutiveErrors())
+		metric.Gauge = &dto.Gauge{Value: &consecutiveErrors}
 	}
 }
