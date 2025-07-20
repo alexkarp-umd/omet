@@ -32,8 +32,7 @@ var timeProvider TimeProvider = RealTimeProvider{}
 
 // ErrorCollector collects errors during operation for metrics
 type ErrorCollector struct {
-	errors            []ErrorInfo
-	consecutiveErrors int
+	errors []ErrorInfo
 }
 
 type ErrorInfo struct {
@@ -43,15 +42,6 @@ type ErrorInfo struct {
 
 func (ec *ErrorCollector) AddError(err error, errorType string) {
 	ec.errors = append(ec.errors, ErrorInfo{err: err, errorType: errorType})
-	ec.consecutiveErrors++
-}
-
-func (ec *ErrorCollector) ResetConsecutiveErrors() {
-	ec.consecutiveErrors = 0
-}
-
-func (ec *ErrorCollector) GetConsecutiveErrors() int {
-	return ec.consecutiveErrors
 }
 
 func (ec *ErrorCollector) HasErrors() bool {
@@ -219,10 +209,6 @@ func runOmet(ctx *cli.Context) error {
 		}
 	}
 
-	// Reset consecutive errors on successful operation
-	if operationSuccessful {
-		errorCollector.ResetConsecutiveErrors()
-	}
 
 	// Calculate processing duration
 	processingDuration := timeProvider.Now().Sub(startTime)
@@ -661,9 +647,24 @@ func addOperationalMetrics(families map[string]*dto.MetricFamily, operation stri
 	// Add omet_consecutive_errors_total gauge
 	consecutiveErrorsFamily, err := getOrCreateFamily(families, "omet_consecutive_errors_total", dto.MetricType_GAUGE)
 	if err == nil {
-		consecutiveErrorsFamily.Help = stringPtr("Number of consecutive errors (resets on success)")
+		consecutiveErrorsFamily.Help = stringPtr("Number of consecutive failed OMET runs (resets on success)")
 		metric := findOrCreateMetric(consecutiveErrorsFamily, map[string]string{})
-		consecutiveErrors := float64(errorCollector.GetConsecutiveErrors())
-		metric.Gauge = &dto.Gauge{Value: &consecutiveErrors}
+		
+		// Get existing consecutive error count (from previous runs)
+		existingCount := 0.0
+		if metric.Gauge != nil {
+			existingCount = metric.Gauge.GetValue()
+		}
+		
+		// If this run had errors, increment consecutive count
+		// If this run was successful, reset to 0
+		var newCount float64
+		if errorCollector.HasErrors() {
+			newCount = existingCount + 1.0
+		} else {
+			newCount = 0.0
+		}
+		
+		metric.Gauge = &dto.Gauge{Value: &newCount}
 	}
 }

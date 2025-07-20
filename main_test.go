@@ -786,14 +786,13 @@ func TestAddOperationalMetrics(t *testing.T) {
 		assert.Equal(t, 1.5, durationFamily.Metric[0].GetGauge().GetValue())
 	})
 	
-	t.Run("adds consecutive errors gauge", func(t *testing.T) {
+	t.Run("adds consecutive errors gauge for failed run", func(t *testing.T) {
 		families := make(map[string]*dto.MetricFamily)
 		collector := &ErrorCollector{}
 		
-		// Add some consecutive errors
+		// Add some errors (this run failed)
 		collector.AddError(fmt.Errorf("error 1"), "type1")
 		collector.AddError(fmt.Errorf("error 2"), "type2")
-		collector.AddError(fmt.Errorf("error 3"), "type1")
 		
 		addOperationalMetrics(families, "inc", 512, time.Second, collector)
 		
@@ -801,22 +800,35 @@ func TestAddOperationalMetrics(t *testing.T) {
 		require.Contains(t, families, "omet_consecutive_errors_total")
 		errorsFamily := families["omet_consecutive_errors_total"]
 		assert.Equal(t, dto.MetricType_GAUGE, errorsFamily.GetType())
-		assert.Equal(t, "Number of consecutive errors (resets on success)", errorsFamily.GetHelp())
-		assert.Equal(t, 3.0, errorsFamily.Metric[0].GetGauge().GetValue())
+		assert.Equal(t, "Number of consecutive failed OMET runs (resets on success)", errorsFamily.GetHelp())
+		assert.Equal(t, 1.0, errorsFamily.Metric[0].GetGauge().GetValue())
 	})
 	
-	t.Run("shows zero consecutive errors after reset", func(t *testing.T) {
-		families := make(map[string]*dto.MetricFamily)
+	t.Run("increments consecutive errors from existing count", func(t *testing.T) {
+		// Start with existing consecutive errors (from previous runs)
+		families := createTestGaugeFamily("omet_consecutive_errors_total", 2.0)
 		collector := &ErrorCollector{}
 		
-		// Add errors then reset
+		// This run also failed
 		collector.AddError(fmt.Errorf("error 1"), "type1")
-		collector.AddError(fmt.Errorf("error 2"), "type2")
-		collector.ResetConsecutiveErrors()
 		
 		addOperationalMetrics(families, "inc", 256, time.Second, collector)
 		
-		// Should show 0 consecutive errors
+		// Should increment to 3 (2 + 1)
+		errorsFamily := families["omet_consecutive_errors_total"]
+		assert.Equal(t, 3.0, errorsFamily.Metric[0].GetGauge().GetValue())
+	})
+	
+	t.Run("resets consecutive errors on successful run", func(t *testing.T) {
+		// Start with existing consecutive errors (from previous runs)
+		families := createTestGaugeFamily("omet_consecutive_errors_total", 5.0)
+		collector := &ErrorCollector{}
+		
+		// This run was successful (no errors)
+		
+		addOperationalMetrics(families, "inc", 256, time.Second, collector)
+		
+		// Should reset to 0
 		errorsFamily := families["omet_consecutive_errors_total"]
 		assert.Equal(t, 0.0, errorsFamily.Metric[0].GetGauge().GetValue())
 	})
@@ -864,14 +876,14 @@ func TestOperationalMetricsIntegration(t *testing.T) {
 		assert.Contains(t, output, "omet_last_write", "should include last write timestamp")
 	})
 	
-	t.Run("consecutive errors tracked across operations", func(t *testing.T) {
+	t.Run("consecutive errors tracked across runs", func(t *testing.T) {
 		mockTime := time.Date(2024, 6, 1, 15, 0, 0, 0, time.UTC)
 		setupMockTime(t, mockTime)
 
 		families := make(map[string]*dto.MetricFamily)
 		collector := &ErrorCollector{}
 		
-		// Simulate multiple errors
+		// Simulate multiple errors in this run
 		collector.AddError(fmt.Errorf("parse error"), "parse_error")
 		collector.AddError(fmt.Errorf("io error"), "io_error")
 		collector.AddError(fmt.Errorf("operation error"), "operation_error")
@@ -885,8 +897,8 @@ func TestOperationalMetricsIntegration(t *testing.T) {
 
 		output := buf.String()
 
-		// Should show 3 consecutive errors
-		assert.Contains(t, output, "omet_consecutive_errors_total 3", "should track consecutive errors")
+		// Should show 1 consecutive error (this run failed, regardless of how many individual errors)
+		assert.Contains(t, output, "omet_consecutive_errors_total 1", "should track consecutive failed runs")
 		
 		// Should also have error breakdown by type
 		assert.Contains(t, output, `omet_errors_total{type="parse_error"} 1`, "should count parse errors")
@@ -916,25 +928,8 @@ func TestErrorCollector(t *testing.T) {
 		
 		assert.False(t, collector.HasErrors())
 		assert.Nil(t, collector.FirstError())
-		assert.Equal(t, 0, collector.GetConsecutiveErrors())
 	})
 	
-	t.Run("tracks consecutive errors and resets", func(t *testing.T) {
-		collector := &ErrorCollector{}
-		
-		// Add some errors
-		collector.AddError(fmt.Errorf("error 1"), "type1")
-		collector.AddError(fmt.Errorf("error 2"), "type2")
-		assert.Equal(t, 2, collector.GetConsecutiveErrors())
-		
-		// Reset consecutive errors
-		collector.ResetConsecutiveErrors()
-		assert.Equal(t, 0, collector.GetConsecutiveErrors())
-		
-		// Add more errors
-		collector.AddError(fmt.Errorf("error 3"), "type1")
-		assert.Equal(t, 1, collector.GetConsecutiveErrors())
-	})
 }
 
 func TestAddErrorMetrics(t *testing.T) {
