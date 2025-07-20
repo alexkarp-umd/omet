@@ -658,7 +658,7 @@ func TestHistogramDebug(t *testing.T) {
 
 		// Test serialization
 		var buf bytes.Buffer
-		err = writeMetricsWithSelfMonitoring(families, &buf)
+		err = writeMetrics(families, &buf)
 		require.NoError(t, err)
 
 		output := buf.String()
@@ -827,7 +827,7 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		require.NoError(t, err)
 
 		var buf bytes.Buffer
-		err = writeMetrics(families, &buf)
+		err = writeMetricsWithSelfMonitoring(families, &buf)
 		require.NoError(t, err)
 
 		output := buf.String()
