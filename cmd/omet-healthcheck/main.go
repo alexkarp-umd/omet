@@ -182,6 +182,7 @@ func checkMaxAge(families map[string]*dto.MetricFamily, maxAge time.Duration, re
 			Message: "omet_last_write metric not found",
 		}
 		if verbose {
+			log.Printf("DEBUG: omet_last_write metric not found")
 			log.Printf("FAIL: omet_last_write metric not found")
 		}
 		return
@@ -194,6 +195,7 @@ func checkMaxAge(families map[string]*dto.MetricFamily, maxAge time.Duration, re
 			Message: "omet_last_write metric has no data",
 		}
 		if verbose {
+			log.Printf("DEBUG: omet_last_write metric has no data")
 			log.Printf("FAIL: omet_last_write metric has no data")
 		}
 		return
@@ -205,6 +207,12 @@ func checkMaxAge(families map[string]*dto.MetricFamily, maxAge time.Duration, re
 	
 	lastWrite := time.Unix(timestamp, 0)
 	age := time.Since(lastWrite)
+
+	if verbose {
+		log.Printf("DEBUG: Last write timestamp: %d (%s)", timestamp, lastWrite.Format(time.RFC3339))
+		log.Printf("DEBUG: Current time: %s", time.Now().Format(time.RFC3339))
+		log.Printf("DEBUG: Age: %v, Max allowed: %v", age.Round(time.Second), maxAge)
+	}
 
 	if age > maxAge {
 		result.Healthy = false
@@ -238,6 +246,7 @@ func checkConsecutiveErrors(families map[string]*dto.MetricFamily, maxErrors int
 			Value:   "0",
 		}
 		if verbose {
+			log.Printf("DEBUG: omet_consecutive_errors_total metric not found")
 			log.Printf("PASS: No consecutive errors metric found (assuming healthy)")
 		}
 		return
@@ -250,6 +259,7 @@ func checkConsecutiveErrors(families map[string]*dto.MetricFamily, maxErrors int
 			Value:   "0",
 		}
 		if verbose {
+			log.Printf("DEBUG: omet_consecutive_errors_total metric has no data")
 			log.Printf("PASS: Consecutive errors metric has no data (assuming healthy)")
 		}
 		return
@@ -258,6 +268,10 @@ func checkConsecutiveErrors(families map[string]*dto.MetricFamily, maxErrors int
 	// Get consecutive error count from gauge
 	consecutiveErrors := family.Metric[0].GetGauge().GetValue()
 	result.ConsecutiveErrors = &consecutiveErrors
+
+	if verbose {
+		log.Printf("DEBUG: Consecutive errors: %.0f, Max allowed: %d", consecutiveErrors, maxErrors)
+	}
 
 	if int(consecutiveErrors) > maxErrors {
 		result.Healthy = false
@@ -282,7 +296,19 @@ func checkConsecutiveErrors(families map[string]*dto.MetricFamily, maxErrors int
 }
 
 func checkMetricExists(families map[string]*dto.MetricFamily, metricName string, result *HealthCheckResult, verbose bool) {
+	// Add list of found metrics for debugging
+	var metricNames []string
+	for name := range families {
+		metricNames = append(metricNames, name)
+	}
+	result.MetricsFound = metricNames
+
 	_, exists := families[metricName]
+	
+	if verbose {
+		log.Printf("DEBUG: Looking for metric '%s'", metricName)
+		log.Printf("DEBUG: Available metrics: %v", metricNames)
+	}
 	
 	if !exists {
 		result.Healthy = false
@@ -302,16 +328,13 @@ func checkMetricExists(families map[string]*dto.MetricFamily, metricName string,
 			log.Printf("PASS: Metric '%s' found", metricName)
 		}
 	}
-
-	// Add list of found metrics for debugging
-	var metricNames []string
-	for name := range families {
-		metricNames = append(metricNames, name)
-	}
-	result.MetricsFound = metricNames
 }
 
 func checkBasicHealth(families map[string]*dto.MetricFamily, result *HealthCheckResult, verbose bool) {
+	if verbose {
+		log.Printf("DEBUG: Found %d metric families", len(families))
+	}
+
 	// Basic health check: ensure we have some metrics and omet_last_write exists
 	if len(families) == 0 {
 		result.Healthy = false
@@ -333,6 +356,11 @@ func checkBasicHealth(families map[string]*dto.MetricFamily, result *HealthCheck
 			Message: "omet_last_write metric not found (omet may not be running)",
 		}
 		if verbose {
+			var names []string
+			for name := range families {
+				names = append(names, name)
+			}
+			log.Printf("DEBUG: Available metrics: %v", names)
 			log.Printf("FAIL: omet_last_write metric not found")
 		}
 		return
