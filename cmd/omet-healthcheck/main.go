@@ -40,6 +40,7 @@ Exit codes:
 			&cli.DurationFlag{
 				Name:  "max-age",
 				Usage: "Maximum age since last write (e.g. 300s, 5m)",
+				Value: 0, // Explicit default
 			},
 			&cli.IntFlag{
 				Name:  "max-consecutive-errors",
@@ -49,10 +50,12 @@ Exit codes:
 			&cli.StringFlag{
 				Name:  "metric-exists",
 				Usage: "Check that specified metric exists",
+				Value: "", // Explicit default
 			},
 			&cli.BoolFlag{
 				Name:  "verbose",
 				Usage: "Enable verbose output",
+				Value: false, // Explicit default
 			},
 		},
 
@@ -88,13 +91,6 @@ func checkHealth(ctx *cli.Context) error {
 
 	filename := ctx.Args().Get(0)
 	verbose := ctx.Bool("verbose")
-
-	// DEBUG: Print what we're getting
-	fmt.Printf("DEBUG: filename=%s\n", filename)
-	fmt.Printf("DEBUG: max-age set=%v, value=%v\n", ctx.IsSet("max-age"), ctx.Duration("max-age"))
-	fmt.Printf("DEBUG: max-consecutive-errors set=%v, value=%v\n", ctx.IsSet("max-consecutive-errors"), ctx.Int("max-consecutive-errors"))
-	fmt.Printf("DEBUG: metric-exists set=%v, value=%s\n", ctx.IsSet("metric-exists"), ctx.String("metric-exists"))
-	fmt.Printf("DEBUG: verbose=%v\n", verbose)
 
 	if verbose {
 		log.Printf("Checking health of metrics file: %s", filename)
