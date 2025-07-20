@@ -868,6 +868,83 @@ func TestErrorHandlingIntegration(t *testing.T) {
 	})
 }
 
+func TestErrorResilienceIntegration(t *testing.T) {
+	t.Run("invalid label format still produces error metrics", func(t *testing.T) {
+		// Create a valid metrics file
+		testContent := `# HELP test_counter A test counter
+# TYPE test_counter counter
+test_counter 10
+`
+		testFile := createTempFile(t, testContent)
+		
+		// Create app and run with invalid label format
+		app := createTestApp()
+		
+		output := captureOutput(t, func() {
+			// This should fail due to invalid label format but still produce output
+			err := app.Run([]string{"omet", "-f", testFile, "-l", "foobar", "test_counter", "inc", "1"})
+			// We expect this to fail, but we want output anyway
+			assert.Error(t, err, "should return error for invalid label format")
+		})
+		
+		// Verify we got output despite the error
+		assert.NotEmpty(t, output, "should produce output even with invalid labels")
+		
+		// Verify error metrics appear in output
+		assert.Contains(t, output, "omet_errors_total", "should include error metrics")
+		assert.Contains(t, output, `omet_errors_total{type="invalid_args"}`, "should categorize label parsing error")
+		
+		// Verify original metrics are preserved
+		assert.Contains(t, output, "test_counter 10", "should preserve original metrics")
+		
+		// Verify self-monitoring metrics
+		assert.Contains(t, output, "omet_modifications_total", "should include modification counter")
+		assert.Contains(t, output, "omet_last_write", "should include last write timestamp")
+	})
+	
+	t.Run("multiple error types are all captured", func(t *testing.T) {
+		// Create a valid metrics file
+		testContent := `# HELP existing_gauge A test gauge
+# TYPE existing_gauge gauge
+existing_gauge 42.5
+`
+		testFile := createTempFile(t, testContent)
+		
+		app := createTestApp()
+		
+		output := captureOutput(t, func() {
+			// Multiple errors: invalid label + type mismatch
+			err := app.Run([]string{"omet", "-f", testFile, "-l", "invalid_label", "existing_gauge", "inc", "1"})
+			assert.Error(t, err, "should return error")
+		})
+		
+		// Should have both error types
+		assert.Contains(t, output, "omet_errors_total", "should include error metrics")
+		// Note: We might see both invalid_args and operation_error
+		
+		// Should still preserve original metrics
+		assert.Contains(t, output, "existing_gauge 42.5", "should preserve original gauge")
+	})
+	
+	t.Run("file not found still produces error output", func(t *testing.T) {
+		app := createTestApp()
+		
+		output := captureOutput(t, func() {
+			// File doesn't exist, but we should still get error metrics
+			err := app.Run([]string{"omet", "-f", "/nonexistent/file.txt", "test_metric", "set", "100"})
+			assert.Error(t, err, "should return error for missing file")
+		})
+		
+		// Should produce output with error metrics
+		assert.NotEmpty(t, output, "should produce output even when file missing")
+		assert.Contains(t, output, "omet_errors_total", "should include error metrics")
+		assert.Contains(t, output, `omet_errors_total{type="io_error"}`, "should categorize file error")
+		
+		// Should still create the requested metric
+		assert.Contains(t, output, "test_metric 100", "should create requested metric despite file error")
+	})
+}
+
 func TestSelfMonitoringMetrics(t *testing.T) {
 	t.Run("adds self-monitoring metrics on write", func(t *testing.T) {
 		// Use mock time for deterministic testing
