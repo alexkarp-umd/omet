@@ -16,6 +16,20 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// TimeProvider allows injecting time for testing
+type TimeProvider interface {
+	Now() time.Time
+}
+
+type RealTimeProvider struct{}
+
+func (r RealTimeProvider) Now() time.Time {
+	return time.Now()
+}
+
+// Global time provider (can be overridden in tests)
+var timeProvider TimeProvider = RealTimeProvider{}
+
 // Standard histogram buckets for response times (in seconds)
 var defaultHistogramBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
@@ -453,7 +467,7 @@ func addSelfMonitoringMetrics(families map[string]*dto.MetricFamily) {
 	lastWriteFamily, err := getOrCreateFamily(families, "omet_last_write", dto.MetricType_GAUGE)
 	if err == nil {
 		metric := findOrCreateMetric(lastWriteFamily, map[string]string{})
-		currentTime := float64(time.Now().Unix())
+		currentTime := float64(timeProvider.Now().Unix())
 		metric.Gauge = &dto.Gauge{Value: &currentTime}
 		
 		// Set help text if not already set

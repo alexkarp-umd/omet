@@ -73,6 +73,32 @@ func createTempFile(t *testing.T, content string) string {
 	return tmpFile.Name()
 }
 
+// MockTimeProvider for testing
+type MockTimeProvider struct {
+	currentTime time.Time
+}
+
+func (m *MockTimeProvider) Now() time.Time {
+	return m.currentTime
+}
+
+func (m *MockTimeProvider) SetTime(t time.Time) {
+	m.currentTime = t
+}
+
+// Helper to set up mock time for tests
+func setupMockTime(t *testing.T, mockTime time.Time) *MockTimeProvider {
+	originalProvider := timeProvider
+	mockProvider := &MockTimeProvider{currentTime: mockTime}
+	timeProvider = mockProvider
+	
+	t.Cleanup(func() {
+		timeProvider = originalProvider
+	})
+	
+	return mockProvider
+}
+
 // createTestApp creates a CLI app instance for testing
 func createTestApp() *cli.App {
 	app := &cli.App{

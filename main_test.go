@@ -708,6 +708,10 @@ func TestHistogramDebug(t *testing.T) {
 
 func TestSelfMonitoringMetrics(t *testing.T) {
 	t.Run("adds self-monitoring metrics on write", func(t *testing.T) {
+		// Use mock time for deterministic testing
+		mockTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+		setupMockTime(t, mockTime)
+		
 		families := make(map[string]*dto.MetricFamily)
 		
 		// Add a regular metric
@@ -723,13 +727,14 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		assert.Contains(t, families, "omet_last_write", "should add omet_last_write metric")
 		assert.Contains(t, families, "omet_modifications_total", "should add omet_modifications_total metric")
 		
-		// Verify omet_last_write is a gauge with recent timestamp
+		// Verify omet_last_write is a gauge with expected timestamp
 		lastWriteFamily := families["omet_last_write"]
 		assert.Equal(t, dto.MetricType_GAUGE, lastWriteFamily.GetType())
 		assert.Len(t, lastWriteFamily.Metric, 1)
 		
-		timestamp := lastWriteFamily.Metric[0].GetGauge().GetValue()
-		assert.Greater(t, timestamp, float64(1700000000), "timestamp should be reasonable (after 2023)")
+		timestamp := int64(lastWriteFamily.Metric[0].GetGauge().GetValue())
+		expectedTimestamp := mockTime.Unix()
+		assert.Equal(t, expectedTimestamp, timestamp, "timestamp should match mock time")
 		
 		// Verify omet_modifications_total is a counter starting at 1
 		modificationsFamily := families["omet_modifications_total"]
@@ -741,6 +746,10 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 	})
 	
 	t.Run("increments modification counter on subsequent writes", func(t *testing.T) {
+		// Use mock time for deterministic testing
+		mockTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+		mockProvider := setupMockTime(t, mockTime)
+		
 		families := make(map[string]*dto.MetricFamily)
 		
 		// First write
@@ -751,7 +760,9 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		err = writeMetrics(families, &buf1)
 		require.NoError(t, err)
 		
-		// Second write
+		// Advance time and do second write
+		mockProvider.SetTime(mockTime.Add(5 * time.Minute))
+		
 		err = incrementCounter(families, "test_counter", map[string]string{}, 1.0)
 		require.NoError(t, err)
 		
@@ -764,13 +775,18 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		count := modificationsFamily.Metric[0].GetCounter().GetValue()
 		assert.Equal(t, 2.0, count, "should increment to 2 after second write")
 		
-		// Verify timestamp updated
+		// Verify timestamp updated to new time
 		lastWriteFamily := families["omet_last_write"]
-		timestamp := lastWriteFamily.Metric[0].GetGauge().GetValue()
-		assert.Greater(t, timestamp, float64(1700000000), "timestamp should be updated")
+		timestamp := int64(lastWriteFamily.Metric[0].GetGauge().GetValue())
+		expectedTimestamp := mockTime.Add(5 * time.Minute).Unix()
+		assert.Equal(t, expectedTimestamp, timestamp, "timestamp should be updated to new mock time")
 	})
 	
 	t.Run("preserves existing self-monitoring metrics", func(t *testing.T) {
+		// Use mock time for deterministic testing
+		mockTime := time.Date(2024, 2, 1, 15, 30, 0, 0, time.UTC)
+		setupMockTime(t, mockTime)
+		
 		// Start with existing self-monitoring metrics (simulating file read)
 		families := createTestCounterFamily("omet_modifications_total", 42.0)
 		gaugeFamily := createTestGaugeFamily("omet_last_write", 1234567890.0)
@@ -790,13 +806,18 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		count := modificationsFamily.Metric[0].GetCounter().GetValue()
 		assert.Equal(t, 43.0, count, "should increment existing counter")
 		
-		// Verify timestamp was updated
+		// Verify timestamp was updated to mock time
 		lastWriteFamily := families["omet_last_write"]
-		timestamp := lastWriteFamily.Metric[0].GetGauge().GetValue()
-		assert.Greater(t, timestamp, 1234567890.0, "should update existing timestamp")
+		timestamp := int64(lastWriteFamily.Metric[0].GetGauge().GetValue())
+		expectedTimestamp := mockTime.Unix()
+		assert.Equal(t, expectedTimestamp, timestamp, "should update to mock time")
 	})
 	
 	t.Run("self-monitoring metrics appear in output", func(t *testing.T) {
+		// Use mock time for deterministic testing
+		mockTime := time.Date(2024, 3, 1, 9, 15, 30, 0, time.UTC)
+		setupMockTime(t, mockTime)
+		
 		families := make(map[string]*dto.MetricFamily)
 		
 		// Add a metric and write
@@ -817,5 +838,9 @@ func TestSelfMonitoringMetrics(t *testing.T) {
 		assert.Contains(t, output, "# HELP omet_modifications_total", "should include help for omet_modifications_total")
 		assert.Contains(t, output, "# TYPE omet_modifications_total counter", "should include type for omet_modifications_total")
 		assert.Contains(t, output, "omet_modifications_total ", "should include omet_modifications_total value")
+		
+		// Verify exact timestamp appears in output
+		expectedTimestamp := mockTime.Unix()
+		assert.Contains(t, output, fmt.Sprintf("omet_last_write %d", expectedTimestamp), "should include exact mock timestamp")
 	})
 }
