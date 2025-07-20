@@ -22,16 +22,16 @@ func main() {
 		
 Examples:
   # Check if metrics were written recently
-  omet-healthcheck /shared/metrics.prom --max-age=300s
+  omet-healthcheck --max-age=300s /shared/metrics.prom
   
   # Check consecutive error count
-  omet-healthcheck /shared/metrics.prom --max-consecutive-errors=10
+  omet-healthcheck --max-consecutive-errors=10 /shared/metrics.prom
   
   # Check if specific metric exists
-  omet-healthcheck /shared/metrics.prom --metric-exists=omet_last_write
+  omet-healthcheck --metric-exists=omet_last_write /shared/metrics.prom
   
   # Multiple checks (all must pass)
-  omet-healthcheck /shared/metrics.prom --max-age=300s --max-consecutive-errors=5
+  omet-healthcheck --max-age=300s --max-consecutive-errors=5 /shared/metrics.prom
 
 Exit codes:
   0 = healthy (all checks passed)
