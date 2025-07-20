@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
@@ -29,6 +31,74 @@ func (r RealTimeProvider) Now() time.Time {
 
 // Global time provider (can be overridden in tests)
 var timeProvider TimeProvider = RealTimeProvider{}
+
+// FileLock represents a file lock with timeout
+type FileLock struct {
+	file    *os.File
+	locked  bool
+	timeout time.Duration
+}
+
+func NewFileLock(filename string, timeout time.Duration) (*FileLock, error) {
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file for locking: %w", err)
+	}
+	
+	return &FileLock{
+		file:    file,
+		timeout: timeout,
+	}, nil
+}
+
+func (fl *FileLock) Lock(ctx context.Context) error {
+	if fl.locked {
+		return fmt.Errorf("already locked")
+	}
+	
+	// Create a context with timeout
+	lockCtx, cancel := context.WithTimeout(ctx, fl.timeout)
+	defer cancel()
+	
+	// Try to acquire lock with timeout
+	done := make(chan error, 1)
+	go func() {
+		err := syscall.Flock(int(fl.file.Fd()), syscall.LOCK_EX)
+		done <- err
+	}()
+	
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("failed to acquire lock: %w", err)
+		}
+		fl.locked = true
+		return nil
+	case <-lockCtx.Done():
+		return fmt.Errorf("lock timeout after %v", fl.timeout)
+	}
+}
+
+func (fl *FileLock) Unlock() error {
+	if !fl.locked {
+		return nil
+	}
+	
+	err := syscall.Flock(int(fl.file.Fd()), syscall.LOCK_UN)
+	if err != nil {
+		return fmt.Errorf("failed to release lock: %w", err)
+	}
+	
+	fl.locked = false
+	return nil
+}
+
+func (fl *FileLock) Close() error {
+	if fl.locked {
+		fl.Unlock()
+	}
+	return fl.file.Close()
+}
 
 // ErrorCollector collects errors during operation for metrics
 type ErrorCollector struct {
@@ -57,6 +127,9 @@ func (ec *ErrorCollector) FirstError() error {
 
 // Standard histogram buckets for response times (in seconds)
 var defaultHistogramBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+
+// Lock wait histogram buckets (in seconds) - focused on sub-second to few-second waits
+var lockWaitHistogramBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 
 
 func main() {
@@ -91,6 +164,15 @@ Examples:
 				Aliases: []string{"v"},
 				Usage:   "Enable verbose logging",
 			},
+			&cli.DurationFlag{
+				Name:  "lock-timeout",
+				Value: 30 * time.Second,
+				Usage: "How long to wait for file lock",
+			},
+			&cli.BoolFlag{
+				Name:  "no-lock",
+				Usage: "Skip file locking (dangerous!)",
+			},
 		},
 
 		ArgsUsage: "<metric_name> <operation> [value]",
@@ -105,6 +187,7 @@ Examples:
 
 func runOmet(ctx *cli.Context) error {
 	errorCollector := &ErrorCollector{}
+	var lockWaitTime time.Duration
 	
 	// Validate arguments
 	if ctx.NArg() < 2 {
@@ -157,41 +240,93 @@ func runOmet(ctx *cli.Context) error {
 		log.Printf("Using value: %g", value)
 	}
 
-	// Read input metrics (best effort)
-	var families map[string]*dto.MetricFamily
-	var input io.Reader
-	var inputSize int64
+	// Determine if we should use file locking
 	filename := ctx.String("file")
-	if filename == "-" {
-		input = os.Stdin
-	} else {
-		file, err := os.Open(filename)
+	useLocking := filename != "-" && !ctx.Bool("no-lock")
+	
+	var families map[string]*dto.MetricFamily
+	var inputSize int64
+	var lock *FileLock
+	
+	if useLocking {
+		// Use file locking approach
+		lockTimeout := ctx.Duration("lock-timeout")
+		
+		if ctx.Bool("verbose") {
+			log.Printf("Acquiring lock on %s (timeout: %v)", filename, lockTimeout)
+		}
+		
+		lock, err = NewFileLock(filename, lockTimeout)
 		if err != nil {
-			errorCollector.AddError(fmt.Errorf("failed to open file %s: %w", filename, err), "io_error")
-			families = make(map[string]*dto.MetricFamily) // Start with empty metrics
+			errorCollector.AddError(fmt.Errorf("failed to create file lock: %w", err), "io_error")
+			families = make(map[string]*dto.MetricFamily)
 		} else {
-			defer file.Close()
-			// Get file size for metrics
-			if stat, err := file.Stat(); err == nil {
-				inputSize = stat.Size()
+			defer lock.Close()
+			
+			// Measure lock wait time
+			lockStart := time.Now()
+			err = lock.Lock(context.Background())
+			lockWaitTime = time.Since(lockStart)
+			
+			if err != nil {
+				errorCollector.AddError(fmt.Errorf("failed to acquire lock: %w", err), "lock_error")
+				families = make(map[string]*dto.MetricFamily)
+			} else {
+				defer lock.Unlock()
+				
+				if ctx.Bool("verbose") {
+					log.Printf("Lock acquired in %v", lockWaitTime)
+				}
+				
+				// Read and parse the locked file
+				lock.file.Seek(0, 0) // Reset to beginning
+				if stat, err := lock.file.Stat(); err == nil {
+					inputSize = stat.Size()
+				}
+				
+				parsedFamilies, err := parseMetrics(lock.file)
+				if err != nil {
+					errorCollector.AddError(fmt.Errorf("failed to parse metrics: %w", err), "parse_error")
+					families = make(map[string]*dto.MetricFamily)
+				} else {
+					families = parsedFamilies
+				}
 			}
-			input = file
 		}
-	}
-
-	// Parse existing metrics (best effort)
-	if input != nil {
-		parsedFamilies, err := parseMetrics(input)
-		if err != nil {
-			errorCollector.AddError(fmt.Errorf("failed to parse metrics: %w", err), "parse_error")
-			families = make(map[string]*dto.MetricFamily) // Start with empty metrics
+	} else {
+		// Use stdin/no-lock logic
+		var input io.Reader
+		if filename == "-" {
+			input = os.Stdin
 		} else {
-			families = parsedFamilies
+			file, err := os.Open(filename)
+			if err != nil {
+				errorCollector.AddError(fmt.Errorf("failed to open file %s: %w", filename, err), "io_error")
+				families = make(map[string]*dto.MetricFamily) // Start with empty metrics
+			} else {
+				defer file.Close()
+				// Get file size for metrics
+				if stat, err := file.Stat(); err == nil {
+					inputSize = stat.Size()
+				}
+				input = file
+			}
 		}
-	}
 
-	if families == nil {
-		families = make(map[string]*dto.MetricFamily)
+		// Parse existing metrics (best effort)
+		if input != nil {
+			parsedFamilies, err := parseMetrics(input)
+			if err != nil {
+				errorCollector.AddError(fmt.Errorf("failed to parse metrics: %w", err), "parse_error")
+				families = make(map[string]*dto.MetricFamily) // Start with empty metrics
+			} else {
+				families = parsedFamilies
+			}
+		}
+
+		if families == nil {
+			families = make(map[string]*dto.MetricFamily)
+		}
 	}
 
 	if ctx.Bool("verbose") {
@@ -209,8 +344,18 @@ func runOmet(ctx *cli.Context) error {
 
 	// Always try to write metrics (including error metrics)
 	addErrorMetrics(families, errorCollector)
-	addOperationalMetrics(families, operation, inputSize, errorCollector)
-	err = writeMetricsWithSelfMonitoring(families, os.Stdout)
+	addOperationalMetrics(families, operation, inputSize, lockWaitTime, errorCollector)
+	
+	// Write back to the locked file if using locking, otherwise to stdout
+	if useLocking && lock != nil && lock.locked {
+		// Truncate and write to the locked file
+		lock.file.Seek(0, 0)
+		lock.file.Truncate(0)
+		err = writeMetricsWithSelfMonitoring(families, lock.file)
+	} else {
+		err = writeMetricsWithSelfMonitoring(families, os.Stdout)
+	}
+	
 	if err != nil {
 		// This is a critical error - we can't write output
 		return fmt.Errorf("failed to write metrics: %w", err)
@@ -601,7 +746,7 @@ func addErrorMetrics(families map[string]*dto.MetricFamily, errorCollector *Erro
 	}
 }
 
-func addOperationalMetrics(families map[string]*dto.MetricFamily, operation string, inputSize int64, errorCollector *ErrorCollector) {
+func addOperationalMetrics(families map[string]*dto.MetricFamily, operation string, inputSize int64, lockWaitTime time.Duration, errorCollector *ErrorCollector) {
 	// Add omet_operations_by_type_total counter
 	opsFamily, err := getOrCreateFamily(families, "omet_operations_by_type_total", dto.MetricType_COUNTER)
 	if err == nil {
@@ -656,5 +801,18 @@ func addOperationalMetrics(families map[string]*dto.MetricFamily, operation stri
 		}
 		
 		metric.Gauge = &dto.Gauge{Value: &newCount}
+	}
+
+	// Add omet_lock_wait_seconds histogram (only if we actually waited for a lock)
+	if lockWaitTime > 0 {
+		lockWaitFamily, err := getOrCreateFamily(families, "omet_lock_wait_seconds", dto.MetricType_HISTOGRAM)
+		if err == nil {
+			lockWaitFamily.Help = stringPtr("Time spent waiting for file locks in seconds")
+			lockWaitSeconds := lockWaitTime.Seconds()
+			err := observeHistogramWithBuckets(families, "omet_lock_wait_seconds", map[string]string{}, lockWaitSeconds, lockWaitHistogramBuckets)
+			if err != nil {
+				// Log error but continue - don't let lock metrics break the operation
+			}
+		}
 	}
 }
