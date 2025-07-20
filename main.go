@@ -173,6 +173,11 @@ Examples:
 				Name:  "no-lock",
 				Usage: "Skip file locking (dangerous!)",
 			},
+			&cli.BoolFlag{
+				Name:    "in-place",
+				Aliases: []string{"i"},
+				Usage:   "Edit file in-place (default: write to stdout)",
+			},
 		},
 
 		ArgsUsage: "<metric_name> <operation> [value]",
@@ -240,9 +245,10 @@ func runOmet(ctx *cli.Context) error {
 		log.Printf("Using value: %g", value)
 	}
 
-	// Determine if we should use file locking
+	// Determine if we should use file locking and in-place editing
 	filename := ctx.String("file")
-	useLocking := filename != "-" && !ctx.Bool("no-lock")
+	inPlace := ctx.Bool("in-place")
+	useLocking := inPlace && filename != "-" && !ctx.Bool("no-lock")
 	
 	var families map[string]*dto.MetricFamily
 	var inputSize int64
@@ -346,13 +352,14 @@ func runOmet(ctx *cli.Context) error {
 	addErrorMetrics(families, errorCollector)
 	addOperationalMetrics(families, operation, inputSize, lockWaitTime, errorCollector)
 	
-	// Write back to the locked file if using locking, otherwise to stdout
+	// Write output based on mode
 	if useLocking && lock != nil && lock.locked {
-		// Truncate and write to the locked file
+		// In-place mode: write back to the locked file
 		lock.file.Seek(0, 0)
 		lock.file.Truncate(0)
 		err = writeMetricsWithSelfMonitoring(families, lock.file)
 	} else {
+		// Default mode: write to stdout (enables pipelines)
 		err = writeMetricsWithSelfMonitoring(families, os.Stdout)
 	}
 	

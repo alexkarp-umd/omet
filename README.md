@@ -11,11 +11,11 @@
 # Install
 go install github.com/alexkarp-umd/omet@latest
 
-# Basic usage - increment a counter
-echo "5" | omet -f metrics.txt request_count inc
+# Basic usage - pipeline mode (default)
+echo "5" | omet -f metrics.txt request_count inc > new_metrics.txt
 
-# Set a gauge with labels
-omet -f metrics.txt -l service=api -l env=prod cpu_usage set 75.5
+# In-place editing with locking
+omet -i -f metrics.txt -l service=api -l env=prod cpu_usage set 75.5
 
 # Check health
 omet-healthcheck -f metrics.txt --max-age=300s
@@ -44,8 +44,11 @@ awk '/^request_count/ {print $1, $2+5}' metrics.txt > temp.txt
 
 **With OMET:**
 ```bash
-# Simple, safe, and reliable
-echo "5" | omet -f metrics.txt request_count inc
+# Simple, safe, and reliable - pipeline mode
+echo "5" | omet -f metrics.txt request_count inc > new_metrics.txt
+
+# Or in-place editing with locking
+omet -i -f metrics.txt request_count inc 5
 # Preserves format
 # Full label support  
 # Type validation
@@ -101,6 +104,7 @@ omet [OPTIONS] <metric_name> <operation> [value]
 |------|-------------|
 | `-f, --file <FILE>` | Input metrics file (default: stdin) |
 | `-l, --label <KEY=VALUE>` | Add label (can be repeated) |
+| `-i, --in-place` | Edit file in-place (default: write to stdout) |
 | `-v, --verbose` | Enable verbose logging |
 | `-h, --help` | Show help |
 
@@ -129,44 +133,47 @@ omet [OPTIONS] <metric_name> <operation> [value]
 ### Basic Operations
 
 ```bash
-# Increment a counter
-omet -f metrics.txt request_count inc 1
+# Pipeline mode (default) - writes to stdout
+omet -f metrics.txt request_count inc 1 > new_metrics.txt
 
-# Set a gauge value
-omet -f metrics.txt memory_usage_bytes set 1048576
+# In-place editing - modifies file directly with locking
+omet -i -f metrics.txt memory_usage_bytes set 1048576
 
-# Add labels to metrics
-omet -f metrics.txt -l region=us-east -l env=prod request_count inc
+# Pipeline with labels
+omet -f metrics.txt -l region=us-east -l env=prod request_count inc > updated.txt
 ```
 
 ### Pipeline Usage
 
 ```bash
 # Count errors from log file
-grep ERROR app.log | wc -l | omet -f metrics.txt -l level=error error_count set
+grep ERROR app.log | wc -l | omet -f metrics.txt -l level=error error_count set > updated.txt
 
-# Monitor queue depth
-echo "42" | omet -f metrics.txt -l queue=processing queue_depth set
+# Monitor queue depth  
+echo "42" | omet -f metrics.txt -l queue=processing queue_depth set > queue_metrics.txt
 
-# Process multiple metrics
+# Process multiple metrics in pipeline
 cat raw_metrics.txt | omet -l service=api | omet -l version=v2.1 > processed_metrics.txt
+
+# In-place updates for production
+grep ERROR app.log | wc -l | omet -i -f /var/lib/node_exporter/errors.prom -l level=error error_count set
 ```
 
 ### Real-world Scenarios
 
 ```bash
-# DevOps: Update deployment metrics
-omet -f /var/lib/node_exporter/deploy.prom \
+# DevOps: Update deployment metrics in-place
+omet -i -f /var/lib/node_exporter/deploy.prom \
      -l version=$(git rev-parse --short HEAD) \
      deployment_timestamp set $(date +%s)
 
-# Monitoring: Custom business metrics  
+# Monitoring: Custom business metrics pipeline
 curl -s https://api.example.com/stats | jq -r '.active_users' | \
-omet -f business_metrics.prom -l product=web active_users_total set
+omet -f business_metrics.prom -l product=web active_users_total set > updated_business.prom
 
-# Testing: Generate test data
+# Testing: Generate test data in-place
 for i in {1..10}; do
-  echo $((RANDOM % 100)) | omet -f test_metrics.prom -l instance=server$i cpu_usage set
+  echo $((RANDOM % 100)) | omet -i -f test_metrics.prom -l instance=server$i cpu_usage set
 done
 ```
 
@@ -174,8 +181,8 @@ done
 
 ### 🚀 CI/CD Pipelines
 ```bash
-# Track deployment metrics
-omet -f /shared/metrics.prom \
+# Track deployment metrics in-place
+omet -i -f /shared/metrics.prom \
      -l version=$(git rev-parse --short HEAD) \
      -l environment=$ENV \
      deployments_total inc
@@ -183,17 +190,17 @@ omet -f /shared/metrics.prom \
 
 ### 📊 Custom Business Metrics
 ```bash
-# Daily revenue tracking
+# Daily revenue tracking in-place
 curl -s "$API/revenue" | jq -r '.today' | \
-omet -f business.prom -l date=$(date +%Y-%m-%d) revenue_dollars set
+omet -i -f business.prom -l date=$(date +%Y-%m-%d) revenue_dollars set
 ```
 
 ### 🔍 Log Processing
 ```bash
-# Real-time error monitoring
+# Real-time error monitoring in-place
 tail -f app.log | grep ERROR | \
 while read line; do
-  echo "1" | omet -f errors.prom -l severity=error error_count inc
+  echo "1" | omet -i -f errors.prom -l severity=error error_count inc
 done
 ```
 
@@ -227,11 +234,11 @@ OMET outputs valid Prometheus exposition format that can be:
 ### Chaining Operations
 
 ```bash
-# Multiple transformations
+# Multiple transformations in pipeline
 cat base_metrics.txt | \
   omet -l datacenter=us-west request_count inc 100 | \
   omet -l environment=production memory_usage set 2048 | \
-  omet -l service=web-api response_time observe 0.250
+  omet -l service=web-api response_time observe 0.250 > final_metrics.txt
 ```
 
 ### Integration with Node Exporter
@@ -242,11 +249,11 @@ cat base_metrics.txt | \
 TEXTFILE_DIR="/var/lib/node_exporter/textfile"
 
 # Custom application metrics
-omet -l app=myapp -l version=1.2.3 app_uptime set $UPTIME_SECONDS > "$TEXTFILE_DIR/app_metrics.prom"
+omet -f /dev/null -l app=myapp -l version=1.2.3 app_uptime set $UPTIME_SECONDS > "$TEXTFILE_DIR/app_metrics.prom"
 
 # Business metrics
 curl -s "$API_ENDPOINT/metrics" | \
-omet -l source=api business_revenue set > "$TEXTFILE_DIR/business_metrics.prom"
+omet -f /dev/null -l source=api business_revenue set > "$TEXTFILE_DIR/business_metrics.prom"
 ```
 
 ### Automation Scripts
@@ -257,15 +264,15 @@ omet -l source=api business_revenue set > "$TEXTFILE_DIR/business_metrics.prom"
 
 # CPU usage
 cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-echo "$cpu_usage" | omet -f system_metrics.prom -l host=$(hostname) cpu_usage_percent set
+echo "$cpu_usage" | omet -i -f system_metrics.prom -l host=$(hostname) cpu_usage_percent set
 
 # Disk usage  
 disk_usage=$(df -h / | awk 'NR==2 {print $5}' | cut -d'%' -f1)
-echo "$disk_usage" | omet -f system_metrics.prom -l host=$(hostname) -l mount=root disk_usage_percent set
+echo "$disk_usage" | omet -i -f system_metrics.prom -l host=$(hostname) -l mount=root disk_usage_percent set
 
 # Active connections
 active_conns=$(netstat -an | grep ESTABLISHED | wc -l)
-echo "$active_conns" | omet -f system_metrics.prom -l host=$(hostname) network_connections_active set
+echo "$active_conns" | omet -i -f system_metrics.prom -l host=$(hostname) network_connections_active set
 ```
 
 ## Docker Usage
@@ -284,9 +291,13 @@ COPY --from=builder /app/omet-healthcheck /usr/local/bin/
 ```
 
 ```bash
-# Use in containers
+# Use in containers - in-place editing
 docker run --rm -v /metrics:/data myapp/omet \
-  -f /data/metrics.prom request_count inc 1
+  -i -f /data/metrics.prom request_count inc 1
+
+# Use in containers - pipeline mode
+docker run --rm -v /metrics:/data myapp/omet \
+  -f /data/metrics.prom request_count inc 1 > /data/new_metrics.prom
 ```
 
 ## Metric Types
@@ -297,8 +308,11 @@ docker run --rm -v /metrics:/data myapp/omet \
 - Good for: request counts, error counts, bytes transferred
 
 ```bash
-omet -f metrics.txt requests_total inc 1
-omet -f metrics.txt -l status=error errors_total inc
+# Pipeline mode
+omet -f metrics.txt requests_total inc 1 > updated.txt
+
+# In-place mode  
+omet -i -f metrics.txt -l status=error errors_total inc
 ```
 
 ### Gauges  
@@ -307,8 +321,11 @@ omet -f metrics.txt -l status=error errors_total inc
 - Good for: CPU usage, memory usage, queue length
 
 ```bash
-omet -f metrics.txt cpu_usage_percent set 75.5
-omet -f metrics.txt -l queue=jobs queue_length set 42
+# Pipeline mode
+omet -f metrics.txt cpu_usage_percent set 75.5 > updated.txt
+
+# In-place mode
+omet -i -f metrics.txt -l queue=jobs queue_length set 42
 ```
 
 ### Histograms
@@ -317,8 +334,11 @@ omet -f metrics.txt -l queue=jobs queue_length set 42
 - Good for: response times, request sizes
 
 ```bash
-# Coming soon!
-omet -f metrics.txt response_time_seconds observe 0.123
+# Pipeline mode
+omet -f metrics.txt response_time_seconds observe 0.123 > updated.txt
+
+# In-place mode
+omet -i -f metrics.txt response_time_seconds observe 0.123
 ```
 
 ## Contributing
